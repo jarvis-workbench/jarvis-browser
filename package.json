@@ -1,0 +1,36 @@
+{
+  "name": "jarvis-browser",
+  "version": "0.1.0",
+  "description": "Site-first multi-session Electron browser",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:start\"",
+    "dev:renderer": "vite --host 127.0.0.1",
+    "dev:main": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:start": "wait-on tcp:5180 dist/main/main.js dist/preload/preload.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5180 electron .",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+  },
+  "dependencies": {
+    "@icon-park/vue-next": "^1.4.2",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "element-plus": "^2.13.7",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.22",
+    "vue-router": "^5.0.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^38.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vue-tsc": "^3.1.1",
+    "wait-on": "^9.0.1"
+  }
+}

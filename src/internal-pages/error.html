@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>网页无法打开</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: #202124;
+      background: #fff;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      align-items: start;
+      justify-content: center;
+      padding: 96px 28px;
+    }
+
+    main {
+      width: min(680px, 100%);
+    }
+
+    .icon {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 24px;
+      color: #9aa0a6;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: 24px;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+
+    p {
+      margin: 0 0 12px;
+      color: #5f6368;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    code {
+      display: block;
+      overflow-wrap: anywhere;
+      margin: 18px 0;
+      border-radius: 6px;
+      padding: 12px;
+      background: #f1f3f4;
+      color: #3c4043;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+
+    button {
+      height: 36px;
+      border: 1px solid #dadce0;
+      border-radius: 18px;
+      padding: 0 18px;
+      background: #fff;
+      color: #1a73e8;
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #f8fbff;
+      border-color: #d2e3fc;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color: #e8eaed;
+        background: #202124;
+      }
+
+      p {
+        color: #bdc1c6;
+      }
+
+      code {
+        background: #303134;
+        color: #e8eaed;
+      }
+
+      button {
+        background: #202124;
+        border-color: #5f6368;
+      }
+
+      button:hover {
+        background: #303134;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <svg class="icon" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="currentColor" d="M23.99 4C12.95 4 4 12.95 4 24s8.95 20 19.99 20C35.04 44 44 35.05 44 24S35.04 4 23.99 4ZM24 8c3.54 0 6.81 1.16 9.45 3.12L11.12 33.45A15.9 15.9 0 0 1 8 24c0-8.84 7.16-16 16-16Zm0 32c-3.54 0-6.81-1.16-9.45-3.12l22.33-22.33A15.9 15.9 0 0 1 40 24c0 8.84-7.16 16-16 16Z"/>
+    </svg>
+    <h1 id="title">无法访问此网页</h1>
+    <p id="summary">网页可能暂时无法连接，或者网络连接已中断。</p>
+    <code id="target-url"></code>
+    <p id="detail"></p>
+    <button id="reload-button" type="button">重新加载</button>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const kind = params.get("kind");
+    const targetUrl = params.get("url") || "";
+    const errorText = params.get("errorText") || "";
+    const statusCode = params.get("statusCode");
+
+    const title = document.querySelector("#title");
+    const summary = document.querySelector("#summary");
+    const detail = document.querySelector("#detail");
+    document.querySelector("#target-url").textContent = targetUrl;
+
+    if (kind === "http" && statusCode) {
+      title.textContent = `HTTP ${statusCode}`;
+      summary.textContent = "服务器返回了错误状态码。";
+      detail.textContent = errorText || `请求失败，状态码：${statusCode}`;
+    } else {
+      title.textContent = "无法访问此网页";
+      summary.textContent = "网页可能暂时无法连接，或者网络连接已中断。";
+      detail.textContent = errorText;
+    }
+
+    document.querySelector("#reload-button").addEventListener("click", () => {
+      window.jarvisErrorPage.reload();
+    });
+  </script>
+</body>
+</html>
