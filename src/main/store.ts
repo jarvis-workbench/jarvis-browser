@@ -230,21 +230,6 @@ export class MetadataStore {
     return structuredClone(session);
   }
 
-  async updateSessionUrl(siteId: string, sessionId: string, url: string) {
-    const { site, session } = this.requireSession(siteId, sessionId);
-    const timestamp = now();
-    session.lastUrl = normalizeHttpUrl(url);
-    session.url = session.lastUrl;
-    session.updatedAt = timestamp;
-    site.updatedAt = timestamp;
-    await this.enqueue(async () => {
-      await this.writeSession(site, session);
-      await this.writeSite(site);
-      await this.writeSitesIndex();
-    });
-    return structuredClone(session);
-  }
-
   async deleteSession(siteId: string, sessionId: string) {
     const site = this.requireSite(siteId);
     const nextSessions = site.sessions.filter((session) => session.id !== sessionId);

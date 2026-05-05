@@ -89,11 +89,11 @@ export class BrowserHost {
       this.lifecycle.markOpen(viewKey);
       this.bindNavigationEvents(view, siteId, sessionId);
       this.bindMonitor(view, siteId, sessionId, viewKey);
-      this.updateViewState(viewKey, view, { siteId, sessionId, url: siteSession.lastUrl || site.url });
+      this.updateViewState(viewKey, view, { siteId, sessionId, url: site.url });
       this.activateViewIfCurrent(viewKey);
       await this.extensionRuntime.loadEnabledForSite(site);
       await this.jarvisScriptRuntime.refreshUserScriptWorkers();
-      await this.loadUrlSafely(normalizeHttpUrl(siteSession.lastUrl || site.url), view, viewKey);
+      await this.loadUrlSafely(normalizeHttpUrl(site.url), view, viewKey);
     }
 
     if (this.isLatestOpenForCurrentView(openRequestId, viewKey)) {
@@ -107,8 +107,6 @@ export class BrowserHost {
     const nextUrl = normalizeHttpUrl(url);
     const viewKey = createViewKey(active.siteId, active.sessionId);
     await this.loadUrlSafely(nextUrl, this.getActiveView(), viewKey);
-    await this.store.updateSessionUrl(active.siteId, active.sessionId, nextUrl);
-    this.emitMetadataUpdate();
   }
 
   back() {
@@ -416,7 +414,6 @@ export class BrowserHost {
       this.failedNavigationUrls.delete(viewKey);
       this.failedNavigationStatusCodes.delete(viewKey);
       this.responseStatusCodes.delete(viewKey);
-      void this.store.updateSessionUrl(siteId, sessionId, url).then(() => this.emitMetadataUpdate());
       this.emitBrowserState(viewKey);
     });
     webContents.on("did-navigate-in-page", (_event, url) => {
@@ -431,7 +428,6 @@ export class BrowserHost {
       this.failedNavigationUrls.delete(viewKey);
       this.failedNavigationStatusCodes.delete(viewKey);
       this.responseStatusCodes.delete(viewKey);
-      void this.store.updateSessionUrl(siteId, sessionId, url).then(() => this.emitMetadataUpdate());
       this.emitBrowserState(viewKey);
     });
     webContents.on("page-title-updated", (_event, title) => {

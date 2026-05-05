@@ -137,7 +137,7 @@ export const useBrowserStore = defineStore('browser', () => {
     tabs.activateSession(site, session);
     await extensions.loadExtensions(site.id);
     const cachedState = getTabState(session.id);
-    address.value = cachedState?.displayUrl || cachedState?.url || session.lastUrl || site.url;
+    address.value = cachedState?.displayUrl || cachedState?.url || site.url;
     await window.appApi.browser.open(site.id, session.id);
     statusMessage.value = `${session.name} 已打开`;
   }
@@ -231,7 +231,7 @@ export const useBrowserStore = defineStore('browser', () => {
     if (tabs.selectedSessionId.value === session.id) {
       tabs.removeSession(site.id, session.id);
       const nextSession = remaining[0] ?? null;
-      address.value = nextSession?.lastUrl ?? site.url;
+      address.value = site.url;
       if (nextSession) {
         await openSession({ ...site, sessions: remaining }, nextSession);
       } else {

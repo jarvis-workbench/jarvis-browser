@@ -40,7 +40,7 @@ const creatingSessionSite = ref<Site | null>(null);
 
 let resizeObserver: ResizeObserver | undefined;
 
-const selectedUrl = computed(() => browser.selectedSession?.lastUrl || browser.selectedSite?.url || '');
+const selectedUrl = computed(() => browser.browserState.displayUrl || browser.browserState.url || browser.selectedSite?.url || '');
 const selectedSessionName = computed(() => browser.selectedSession?.name ?? '');
 const isHomeActive = computed(() => browser.activeTabId === browser.homeTabId);
 const showSessionName = computed(() => !isHomeActive.value && Boolean(selectedSessionName.value));

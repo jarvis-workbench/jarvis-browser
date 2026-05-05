@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  createSession: [site?: Site];
+  createSession: [site: Site, name: string];
   openSession: [site: Site, session: SiteSession];
 }>();
 
@@ -32,6 +32,8 @@ const deleteSiteConfirmText = ref('');
 const editingSiteTitle = ref('');
 const editingSiteUrl = ref('');
 const savingSite = ref(false);
+const creatingSession = ref(false);
+const creatingSessionName = ref('');
 
 const isSettingsMode = computed(() => Boolean(props.settingsSiteId));
 
@@ -57,6 +59,7 @@ watch(
   () => [props.modelValue, props.showSitePicker, props.settingsSiteId, browser.selectedSiteId, browser.sites.length] as const,
   ([visible]) => {
     if (!visible) {
+      resetCreateSession();
       return;
     }
 
@@ -64,6 +67,7 @@ watch(
       ? selectedDrawerSiteId.value || browser.selectedSiteId || browser.sites[0]?.id || ''
       : browser.selectedSiteId || '';
     resetDeleteSiteConfirm();
+    resetCreateSession();
     editingSiteTitle.value = drawerSite.value?.title ?? '';
     editingSiteUrl.value = drawerSite.value?.url ?? '';
   },
@@ -174,6 +178,39 @@ function resetDeleteSiteConfirm() {
   deleteSiteConfirmText.value = '';
 }
 
+function startCreateSession() {
+  if (!drawerSite.value) {
+    return;
+  }
+
+  creatingSession.value = true;
+  creatingSessionName.value = '';
+  editingSessionId.value = null;
+  editingSessionName.value = '';
+  pendingClearSessionId.value = null;
+  pendingDeleteSessionId.value = null;
+}
+
+function resetCreateSession() {
+  creatingSession.value = false;
+  creatingSessionName.value = '';
+}
+
+function submitCreateSession() {
+  if (!drawerSite.value) {
+    return;
+  }
+
+  const name = creatingSessionName.value.trim();
+  if (!name) {
+    ElMessage.error('会话名称不能为空');
+    return;
+  }
+
+  emit('createSession', drawerSite.value, name);
+  resetCreateSession();
+}
+
 async function confirmDeleteSite() {
   if (!drawerSite.value || !canConfirmDeleteSite.value) {
     return;
@@ -198,6 +235,10 @@ function openSession(session: SiteSession) {
   }
 
   emit('openSession', drawerSite.value, session);
+}
+
+function sessionEntryUrl() {
+  return drawerSite.value?.url ?? '';
 }
 
 function siteDisplayTitle(site: Site) {
@@ -266,11 +307,17 @@ function siteInitial(site: Site) {
     <div class="drawer-section">
       <div class="drawer-title">
         <span>会话列表</span>
-        <ElButton size="small" type="primary" :disabled="!drawerSite" @click="emit('createSession', drawerSite || undefined)">
+        <ElButton size="small" type="primary" :disabled="!drawerSite" @click="startCreateSession">
           <AddOne theme="outline" size="16" />
           新建
         </ElButton>
       </div>
+
+      <form v-if="creatingSession" class="session-inline" @submit.prevent="submitCreateSession">
+        <ElInput v-model="creatingSessionName" size="small" placeholder="输入会话名称" autofocus />
+        <ElButton native-type="submit" size="small" type="primary">创建</ElButton>
+        <ElButton size="small" @click="resetCreateSession">取消</ElButton>
+      </form>
 
       <article
         v-for="session in drawerSessions"
@@ -280,7 +327,7 @@ function siteInitial(site: Site) {
       >
         <button type="button" @click="openSession(session)">
           <strong>{{ session.name }}</strong>
-          <span>{{ session.lastUrl }}</span>
+          <span>{{ sessionEntryUrl() }}</span>
         </button>
         <div v-if="!showSitePicker" class="session-row__actions">
           <button type="button" class="session-action-text" @click="startRenameSession(session)">
