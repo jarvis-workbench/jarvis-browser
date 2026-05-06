@@ -46,25 +46,28 @@ const emit = defineEmits<{
   flex-direction: column;
   min-width: 320px;
   max-width: min(460px, 100%);
-  background: #ffffff;
-  border-left: 1px solid #c7cdd4;
-  box-shadow: -4px 0 12px rgba(60, 64, 67, 0.12);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 255, 0.96), rgba(250, 251, 255, 0.92)),
+    rgba(255, 255, 255, 0.88);
+  border-left: 1px solid rgba(188, 199, 224, 0.72);
+  box-shadow: -18px 0 48px rgba(52, 64, 108, 0.12);
+  backdrop-filter: blur(24px);
 }
 
 .browser-drawer__header {
   display: flex;
-  min-height: 56px;
+  min-height: 58px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px 10px;
-  color: #202124;
+  padding: 20px 22px 12px;
+  color: #172049;
 }
 
 .browser-drawer__header h2 {
   overflow: hidden;
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -72,25 +75,26 @@ const emit = defineEmits<{
 
 .browser-drawer__header button {
   display: inline-flex;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: #3c4043;
+  color: #667190;
 }
 
 .browser-drawer__header button:hover {
-  background: #f1f3f4;
+  background: rgba(235, 240, 252, 0.8);
+  color: #26304d;
 }
 
 .browser-drawer__body {
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: 20px;
+  padding: 12px 22px 22px;
 }
 </style>

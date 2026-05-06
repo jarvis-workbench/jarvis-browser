@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, BrowserRect, BrowserState, DownloadState, JarvisScript, JarvisScriptMessage, Site, SiteExtension, WindowChromeInfo } from "../shared/types";
+import type { AppApi, BrowserRect, BrowserState, DownloadSettings, DownloadState, JarvisScript, JarvisScriptMessage, Site, SiteExtension, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -44,6 +44,8 @@ const appApi: AppApi = {
     reload: () => invoke("browser:reload"),
     stop: () => invoke("browser:stop"),
     showHome: () => invoke("browser:show-home"),
+    hideEmbeddedView: () => invoke("browser:hide-embedded-view"),
+    showActiveView: () => invoke("browser:show-active-view"),
     setBounds: (rect: BrowserRect) => invoke("browser:set-bounds", rect),
     close: () => invoke("browser:close"),
     closeSession: (siteId, sessionId) => invoke("browser:close-session", siteId, sessionId),
@@ -72,6 +74,21 @@ const appApi: AppApi = {
     enableSite: (siteId, scriptId) => invoke("jarvis-scripts:enable-site", siteId, scriptId),
     disableSite: (siteId, scriptId) => invoke("jarvis-scripts:disable-site", siteId, scriptId),
     uninstallSite: (siteId, scriptId) => invoke("jarvis-scripts:uninstall-site", siteId, scriptId),
+  },
+  downloads: {
+    list: () => invoke<DownloadState[]>("downloads:list"),
+    pause: (downloadId) => invoke("downloads:pause", downloadId),
+    resume: (downloadId) => invoke("downloads:resume", downloadId),
+    cancel: (downloadId) => invoke("downloads:cancel", downloadId),
+    open: (downloadId) => invoke("downloads:open", downloadId),
+    showInFolder: (downloadId) => invoke("downloads:show-in-folder", downloadId),
+    remove: (downloadId) => invoke("downloads:remove", downloadId),
+    clear: () => invoke("downloads:clear"),
+  },
+  settings: {
+    get: () => invoke<DownloadSettings>("settings:get"),
+    update: (input) => invoke("settings:update", input),
+    selectDownloadPath: () => invoke("settings:select-download-path"),
   },
   windowChrome,
   onBrowserStateChanged: (callback) => on<[BrowserState]>("browser:state-changed", callback),

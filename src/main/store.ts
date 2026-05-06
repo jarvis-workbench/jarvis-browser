@@ -1,11 +1,18 @@
+import { app } from "electron";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
+import type { DownloadSettings, DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
 import { createSiteFaviconAssetUrl } from "./asset-protocol";
 import { dataPaths } from "./data-paths";
 import { createJarvisScriptFromPath } from "./jarvis-script/manifest";
 
 type SiteIndexItem = Pick<Site, "id" | "title" | "name" | "url" | "faviconUrl" | "faviconPath" | "createdAt" | "updatedAt">;
+type ProfileFile = {
+  id: string;
+  name: string;
+  createdAt: string;
+  downloadSettings?: Partial<DownloadSettings>;
+};
 
 const now = () => new Date().toISOString();
 
@@ -38,14 +45,13 @@ export const normalizeHttpUrl = (rawUrl: string) => {
   return parsed.toString();
 };
 
-export const sessionDataPath = (siteId: string, sessionId: string) =>
-  dataPaths.sites.sessionElectronDir(siteId, sessionId);
-
 export class MetadataStore {
   private sites: Site[] = [];
   private globalExtensions: SiteExtension[] = [];
   private globalJarvisScripts: JarvisScript[] = [];
   private downloads: DownloadState[] = [];
+  private profile: ProfileFile = createDefaultProfile();
+  private downloadSettings: DownloadSettings = createDefaultDownloadSettings();
   private loaded = false;
   private writeQueue = Promise.resolve();
 
@@ -55,9 +61,13 @@ export class MetadataStore {
     }
 
     await ensureBaseDirectories();
+    this.profile = await readJson<ProfileFile>(dataPaths.profileFile, createDefaultProfile());
+    this.downloadSettings = normalizeDownloadSettings(this.profile.downloadSettings);
     this.globalExtensions = await readJson<SiteExtension[]>(dataPaths.global.extensionsIndexFile, []);
     this.globalJarvisScripts = await readJson<JarvisScript[]>(dataPaths.global.jarvisScriptsIndexFile, []);
-    this.downloads = await readJson<DownloadState[]>(dataPaths.global.downloadsFile, []);
+    this.downloads = (await readJson<DownloadState[]>(dataPaths.global.downloadsFile, []))
+      .map(normalizeDownloadState)
+      .filter((download) => download.id && download.filename);
     this.sites = await this.loadSites();
     await this.persistLoadedState();
     this.loaded = true;
@@ -69,6 +79,27 @@ export class MetadataStore {
 
   listDownloads() {
     return structuredClone(this.downloads);
+  }
+
+  getDownload(downloadId: string) {
+    return this.downloads.find((download) => download.id === downloadId);
+  }
+
+  getDownloadSettings() {
+    return structuredClone(this.downloadSettings);
+  }
+
+  async updateDownloadSettings(input: Partial<DownloadSettings>) {
+    this.downloadSettings = normalizeDownloadSettings({
+      ...this.downloadSettings,
+      ...input,
+    });
+    this.profile = {
+      ...this.profile,
+      downloadSettings: this.downloadSettings,
+    };
+    await this.persistProfile();
+    return this.getDownloadSettings();
   }
 
   listGlobalExtensions() {
@@ -89,10 +120,6 @@ export class MetadataStore {
 
   getSession(siteId: string, sessionId: string) {
     return this.getSite(siteId)?.sessions.find((session) => session.id === sessionId);
-  }
-
-  getSessionDataPath(siteId: string, sessionId: string) {
-    return sessionDataPath(siteId, sessionId);
   }
 
   getGlobalExtension(extensionId: string) {
@@ -196,14 +223,12 @@ export class MetadataStore {
       id: createId(),
       siteId,
       name: sessionName,
-      sessionPath: dataPaths.sites.sessionElectronDir(siteId, "pending"),
       lastUrl: site.url,
       url: site.url,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
 
-    session.sessionPath = dataPaths.sites.sessionElectronDir(siteId, session.id);
     site.sessions.push(session);
     site.updatedAt = timestamp;
     await this.enqueue(async () => {
@@ -421,12 +446,28 @@ export class MetadataStore {
   }
 
   async upsertDownload(download: DownloadState) {
+    const normalized = normalizeDownloadState(download);
     this.downloads = [
-      download,
-      ...this.downloads.filter((item) => item.id !== download.id),
+      normalized,
+      ...this.downloads.filter((item) => item.id !== normalized.id),
     ].slice(0, 200);
     await this.persistDownloads();
-    return structuredClone(download);
+    return structuredClone(normalized);
+  }
+
+  async removeDownload(downloadId: string) {
+    const nextDownloads = this.downloads.filter((download) => download.id !== downloadId);
+    if (nextDownloads.length === this.downloads.length) {
+      throw new Error("下载记录不存在");
+    }
+
+    this.downloads = nextDownloads;
+    await this.persistDownloads();
+  }
+
+  async clearDownloads() {
+    this.downloads = [];
+    await this.persistDownloads();
   }
 
   async installGlobalExtensionSource(extension: SiteExtension, sourcePath: string) {
@@ -472,7 +513,6 @@ export class MetadataStore {
     return sessions.map((session) => ({
       ...session,
       siteId,
-      sessionPath: dataPaths.sites.sessionElectronDir(siteId, session.id),
     }));
   }
 
@@ -510,6 +550,12 @@ export class MetadataStore {
   private async persistDownloads() {
     await this.enqueue(async () => {
       await writeJson(dataPaths.global.downloadsFile, this.downloads);
+    });
+  }
+
+  private async persistProfile() {
+    await this.enqueue(async () => {
+      await writeJson(dataPaths.profileFile, this.profile);
     });
   }
 
@@ -629,11 +675,7 @@ async function ensureBaseDirectories() {
   await mkdir(dataPaths.sites.root, { recursive: true });
   await mkdir(dataPaths.runtime.userData, { recursive: true });
   await mkdir(dataPaths.runtime.sessionData, { recursive: true });
-  await writeJsonIfMissing(dataPaths.profileFile, {
-    id: "default",
-    name: "default",
-    createdAt: now(),
-  });
+  await writeJsonIfMissing(dataPaths.profileFile, createDefaultProfile());
   await writeJsonIfMissing(dataPaths.global.metadataFile, {
     userId: "default",
     updatedAt: now(),
@@ -642,6 +684,51 @@ async function ensureBaseDirectories() {
   await writeJsonIfMissing(dataPaths.global.extensionsIndexFile, []);
   await writeJsonIfMissing(dataPaths.global.jarvisScriptsIndexFile, []);
   await writeJsonIfMissing(dataPaths.sites.indexFile, []);
+}
+
+function createDefaultProfile(): ProfileFile {
+  return {
+    id: "default",
+    name: "default",
+    createdAt: now(),
+    downloadSettings: createDefaultDownloadSettings(),
+  };
+}
+
+function createDefaultDownloadSettings(): DownloadSettings {
+  return {
+    downloadPath: app.getPath("downloads"),
+    askWhereToSaveBeforeDownloading: false,
+  };
+}
+
+function normalizeDownloadSettings(input?: Partial<DownloadSettings>): DownloadSettings {
+  const fallback = createDefaultDownloadSettings();
+  return {
+    downloadPath: typeof input?.downloadPath === "string" && input.downloadPath.trim()
+      ? input.downloadPath
+      : fallback.downloadPath,
+    askWhereToSaveBeforeDownloading: Boolean(input?.askWhereToSaveBeforeDownloading),
+  };
+}
+
+function normalizeDownloadState(input: Partial<DownloadState>): DownloadState {
+  return {
+    id: input.id ?? "",
+    filename: input.filename ?? "",
+    url: input.url ?? "",
+    savePath: input.savePath ?? "",
+    mimeType: input.mimeType ?? "",
+    receivedBytes: input.receivedBytes ?? 0,
+    totalBytes: input.totalBytes ?? 0,
+    state: input.state ?? "interrupted",
+    startTime: input.startTime ?? Date.now(),
+    endTime: input.endTime,
+    paused: Boolean(input.paused),
+    canResume: Boolean(input.canResume),
+    speedBytesPerSecond: input.speedBytesPerSecond ?? 0,
+    errorText: input.errorText,
+  };
 }
 
 function toSiteIndexItem(site: Site): SiteIndexItem {

@@ -3,12 +3,14 @@ import {
   AddOne,
   Close,
   Code,
+  Download,
   Home,
   Left,
   Loading,
   Plug,
   Refresh,
   Right,
+  Setting,
   Time,
 } from '@icon-park/vue-next';
 import {
@@ -22,7 +24,10 @@ import BrowserDrawer from '../components/BrowserDrawer.vue';
 import ExtensionManager from '../components/ExtensionManager.vue';
 import JarvisScriptManager from '../components/JarvisScriptManager.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
+import { downloadsTabId, internalPageUrls, settingsTabId, type InternalPageTabId } from '../stores/browser-tabs';
 import { useBrowserStore } from '../stores/browser';
+import DownloadsView from './DownloadsView.vue';
+import SettingsView from './SettingsView.vue';
 import SitesView from './SitesView.vue';
 
 const browser = useBrowserStore();
@@ -41,12 +46,26 @@ const creatingSessionSite = ref<Site | null>(null);
 let resizeObserver: ResizeObserver | undefined;
 
 const selectedUrl = computed(() => browser.browserState.displayUrl || browser.browserState.url || browser.selectedSite?.url || '');
+const displayedAddress = computed(() => {
+  if (isDownloadsActive.value) {
+    return internalPageUrls[downloadsTabId];
+  }
+
+  if (isSettingsActive.value) {
+    return internalPageUrls[settingsTabId];
+  }
+
+  return browser.address;
+});
 const selectedSessionName = computed(() => browser.selectedSession?.name ?? '');
 const isHomeActive = computed(() => browser.activeTabId === browser.homeTabId);
-const showSessionName = computed(() => !isHomeActive.value && Boolean(selectedSessionName.value));
+const isDownloadsActive = computed(() => browser.activeTabId === browser.downloadsTabId);
+const isSettingsActive = computed(() => browser.activeTabId === browser.settingsTabId);
+const isInternalPageActive = computed(() => isHomeActive.value || isDownloadsActive.value || isSettingsActive.value);
+const showSessionName = computed(() => !isInternalPageActive.value && Boolean(selectedSessionName.value));
 const browserInsetLeft = computed(() => 0);
 const browserInsetRight = computed(() => {
-  if (isHomeActive.value) {
+  if (isInternalPageActive.value) {
     return 0;
   }
 
@@ -60,6 +79,17 @@ const browserInsetRight = computed(() => {
 const creatingSessionTitle = computed(() => (
   creatingSessionSite.value ? `新建会话 - ${creatingSessionSite.value.title}` : '新建会话'
 ));
+const activeDownloadCount = computed(() => browser.activeDownloads.length);
+const downloadProgress = computed(() => {
+  const activeDownloads = browser.activeDownloads.filter((download) => download.totalBytes > 0);
+  if (!activeDownloads.length) {
+    return 0;
+  }
+
+  const receivedBytes = activeDownloads.reduce((total, download) => total + download.receivedBytes, 0);
+  const totalBytes = activeDownloads.reduce((total, download) => total + download.totalBytes, 0);
+  return totalBytes ? Math.max(0, Math.min(100, Math.round((receivedBytes / totalBytes) * 100))) : 0;
+});
 
 async function setActivePanel(panel: ActivePanel) {
   activePanel.value = panel;
@@ -132,6 +162,11 @@ async function openSession(site: Site, session: SiteSession) {
   }
 }
 
+async function activateInternalTab(tabId: InternalPageTabId) {
+  await browser.activateInternalPage(tabId);
+  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+}
+
 async function refreshScriptManager(siteId: string | null) {
   if (!scriptManagerVisible.value || !siteId) {
     return;
@@ -161,6 +196,10 @@ async function openSessionFromPicker(site: Site, session: SiteSession) {
 }
 
 async function navigate() {
+  if (isInternalPageActive.value) {
+    return;
+  }
+
   try {
     await browser.navigate();
   } catch (error) {
@@ -185,9 +224,24 @@ async function closeSessionTab(site: Site, session: SiteSession) {
   }
 }
 
+async function closeInternalTab(tabId: InternalPageTabId) {
+  await browser.closeInternalPage(tabId);
+  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+}
+
 async function goHome() {
   await setActivePanel(null);
   await browser.activateHome();
+}
+
+async function openDownloads() {
+  await setActivePanel(null);
+  await browser.activateInternalPage(downloadsTabId);
+}
+
+async function openSettings() {
+  await setActivePanel(null);
+  await browser.activateInternalPage(settingsTabId);
 }
 
 async function openExtensionManager() {
@@ -278,6 +332,7 @@ watch(
     await refreshScriptManager(siteId);
   },
 );
+
 </script>
 
 <template>
@@ -320,6 +375,20 @@ watch(
         </button>
 
         <button
+          v-for="tab in browser.openInternalTabs"
+          :key="tab.id"
+          class="chrome-tab chrome-tab--internal"
+          :class="{ 'chrome-tab--active': tab.id === browser.activeTabId }"
+          type="button"
+          @click="activateInternalTab(tab.id)"
+        >
+          <Download v-if="tab.id === browser.downloadsTabId" theme="outline" size="14" />
+          <Setting v-else theme="outline" size="14" />
+          <span class="chrome-tab__title">{{ tab.title }}</span>
+          <Close class="chrome-tab__close" theme="outline" size="13" @click.stop="closeInternalTab(tab.id)" />
+        </button>
+
+        <button
           class="chrome-tab-add"
           :class="{ 'chrome-toolbar-button--active': activePanel === 'tabPicker' }"
           type="button"
@@ -336,15 +405,15 @@ watch(
         aria-label="浏览器工具栏"
         @submit.prevent="navigate"
       >
-        <button type="button" title="后退" :disabled="isHomeActive || !browser.browserState.canGoBack" @click="browserAction('back')">
+        <button type="button" title="后退" :disabled="isInternalPageActive || !browser.browserState.canGoBack" @click="browserAction('back')">
           <Left theme="outline" size="18" />
         </button>
-        <button type="button" title="前进" :disabled="isHomeActive || !browser.browserState.canGoForward" @click="browserAction('forward')">
+        <button type="button" title="前进" :disabled="isInternalPageActive || !browser.browserState.canGoForward" @click="browserAction('forward')">
           <Right theme="outline" size="18" />
         </button>
         <button
           type="button"
-          :disabled="isHomeActive"
+          :disabled="isInternalPageActive"
           :title="browser.browserState.isLoading ? '停止' : '刷新'"
           @click="browser.browserState.isLoading ? browserAction('stop') : browserAction('reload')"
         >
@@ -363,43 +432,88 @@ watch(
 
         <div class="address-box">
           <span class="address-box__status">
-            {{ isHomeActive ? '起始页' : browser.browserState.errorText ? '失败' : browser.browserState.isLoading ? '加载中' : '站点' }}
+            {{ isHomeActive ? '起始页' : isDownloadsActive ? '下载' : isSettingsActive ? '设置' : browser.browserState.errorText ? '失败' : browser.browserState.isLoading ? '加载中' : '站点' }}
           </span>
-          <input v-model="browser.address" type="text" aria-label="地址栏" placeholder="输入网址" :disabled="isHomeActive" />
+          <input
+            :value="displayedAddress"
+            type="text"
+            aria-label="地址栏"
+            placeholder="输入网址"
+            :disabled="isInternalPageActive"
+            @input="browser.address = ($event.target as HTMLInputElement).value"
+          />
         </div>
 
         <button
           type="button"
-          title="Jarvis 脚本"
-          :class="{ 'chrome-toolbar-button--active': activePanel === 'scriptManager' }"
-          :disabled="isHomeActive"
-          @click="openScriptManager"
+          title="会话管理"
+          :class="{ 'chrome-toolbar-button--active': activePanel === 'sessionDrawer' }"
+          :disabled="isInternalPageActive"
+          @click="togglePanel('sessionDrawer')"
         >
-          <Code theme="outline" size="18" />
+          <Time theme="outline" size="18" />
         </button>
         <button
           type="button"
           title="插件管理"
           :class="{ 'chrome-toolbar-button--active': activePanel === 'extensionManager' }"
-          :disabled="isHomeActive"
+          :disabled="isInternalPageActive"
           @click="openExtensionManager"
         >
           <Plug theme="outline" size="18" />
         </button>
         <button
           type="button"
-          title="会话管理"
-          :class="{ 'chrome-toolbar-button--active': activePanel === 'sessionDrawer' }"
-          :disabled="isHomeActive"
-          @click="togglePanel('sessionDrawer')"
+          title="Jarvis 脚本"
+          :class="{ 'chrome-toolbar-button--active': activePanel === 'scriptManager' }"
+          :disabled="isInternalPageActive"
+          @click="openScriptManager"
         >
-          <Time theme="outline" size="18" />
+          <Code theme="outline" size="18" />
+        </button>
+        <button
+          class="chrome-download-button"
+          type="button"
+          title="下载内容"
+          :class="{
+            'chrome-download-button--active': activeDownloadCount > 0,
+            'chrome-toolbar-button--active': isDownloadsActive,
+          }"
+          :style="{ '--download-progress-value': downloadProgress }"
+          @click="openDownloads"
+        >
+          <svg class="chrome-download-button__ring" viewBox="0 0 32 32" aria-hidden="true">
+            <circle
+              class="chrome-download-button__ring-track"
+              cx="16"
+              cy="16"
+              r="11"
+            />
+            <circle
+              class="chrome-download-button__ring-progress"
+              cx="16"
+              cy="16"
+              r="11"
+            />
+          </svg>
+          <Download theme="outline" size="18" />
+          <span v-if="activeDownloadCount > 0" class="chrome-download-button__badge">{{ activeDownloadCount }}</span>
+        </button>
+        <button
+          type="button"
+          title="设置"
+          :class="{ 'chrome-toolbar-button--active': isSettingsActive }"
+          @click="openSettings"
+        >
+          <Setting theme="outline" size="18" />
         </button>
       </form>
     </section>
 
     <section ref="browserHost" class="browser-viewport">
       <SitesView v-if="isHomeActive" />
+      <DownloadsView v-else-if="isDownloadsActive" />
+      <SettingsView v-else-if="isSettingsActive" />
       <div v-else-if="!browser.selectedSession" class="browser-placeholder">
         <p>当前站点还没有会话</p>
         <ElButton type="primary" @click="openCurrentSessionCreator()">
@@ -453,11 +567,11 @@ watch(
 
 <style scoped>
 .chrome-toolbar {
-  grid-template-columns: repeat(3, 32px) minmax(36px, max-content) minmax(220px, 1fr) repeat(3, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(36px, max-content) minmax(220px, 1fr) repeat(5, 32px);
 }
 
 .chrome-toolbar--without-session {
-  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(5, 32px);
 }
 
 .chrome-session-name {
@@ -501,5 +615,71 @@ watch(
 .chrome-toolbar .chrome-toolbar-button--active:hover,
 .chrome-tab-add.chrome-toolbar-button--active:hover {
   background: #c2d7f7;
+}
+
+.chrome-download-button {
+  position: relative;
+}
+
+.chrome-download-button--active {
+  color: #1a73e8;
+}
+
+.chrome-download-button__ring {
+  position: absolute;
+  inset: 0;
+  width: 32px;
+  height: 32px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+  transform: rotate(-90deg);
+}
+
+.chrome-download-button__ring-track,
+.chrome-download-button__ring-progress {
+  fill: none;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.chrome-download-button__ring-track {
+  stroke: #dfe8fb;
+}
+
+.chrome-download-button__ring-progress {
+  stroke: #1a73e8;
+  stroke-dasharray: 69.12;
+  stroke-dashoffset: calc(69.12 - (69.12 * var(--download-progress-value, 0) / 100));
+  stroke-linecap: round;
+}
+
+.chrome-download-button--active .chrome-download-button__ring {
+  opacity: 1;
+}
+
+.chrome-download-button > .i-icon {
+  position: relative;
+  z-index: 1;
+}
+
+.chrome-download-button__badge {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  z-index: 2;
+  display: inline-flex;
+  min-width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  padding: 0 3px;
+  background: #1a73e8;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 </style>

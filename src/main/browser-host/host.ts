@@ -7,7 +7,7 @@ import type { BrowserRect, BrowserState } from "../../shared/types";
 import { clampBrowserBounds, defaultBrowserBounds } from "../browser-bounds";
 import { DownloadManager } from "../download-manager";
 import { createErrorPageUrl, isInternalErrorPageUrl, registerErrorPageProtocolForSession } from "../error-page";
-import { getElectronSession } from "../electron-session-manager";
+import { flushElectronSession, getElectronSession } from "../electron-session-manager";
 import { ExtensionRuntime } from "../extension-runtime";
 import { JarvisScriptManager } from "../jarvis-script/manager";
 import { JarvisScriptRuntime } from "../jarvis-script/runtime";
@@ -70,10 +70,9 @@ export class BrowserHost {
     let view = this.views.get(viewKey);
 
     if (!view) {
-      const sessionPath = this.store.getSessionDataPath(siteId, sessionId);
-      const targetSession = await getElectronSession(sessionPath);
+      const targetSession = getElectronSession(siteId, sessionId);
       registerErrorPageProtocolForSession(targetSession);
-      this.downloadManager.bindSession(sessionPath, targetSession);
+      this.downloadManager.bindSession(viewKey, targetSession);
 
       view = new WebContentsView({
         webPreferences: {
@@ -208,13 +207,24 @@ export class BrowserHost {
     this.emitHomeState();
   }
 
+  hideEmbeddedView() {
+    this.unmountActiveView();
+  }
+
+  showActiveView() {
+    if (this.siteId && this.sessionId) {
+      this.activateView(this.siteId, this.sessionId);
+    }
+  }
+
   setBounds(rect: BrowserRect) {
     this.bounds = clampBrowserBounds(rect);
     this.getActiveViewOrUndefined()?.setBounds(this.bounds);
   }
 
-  close() {
+  async close() {
     for (const [viewKey, view] of this.views) {
+      await this.flushViewSession(view);
       this.destroyView(viewKey, view);
     }
     this.views.clear();
@@ -229,10 +239,11 @@ export class BrowserHost {
     this.jarvisScriptRuntime.close();
   }
 
-  closeSession(siteId: string, sessionId: string) {
+  async closeSession(siteId: string, sessionId: string) {
     const viewKey = createViewKey(siteId, sessionId);
     const view = this.views.get(viewKey);
     if (view) {
+      await this.flushViewSession(view);
       this.destroyView(viewKey, view);
       this.views.delete(viewKey);
     }
@@ -338,6 +349,26 @@ export class BrowserHost {
 
   bindDefaultDownloads() {
     this.downloadManager.bindDefault();
+  }
+
+  pauseDownload(downloadId: string) {
+    return this.downloadManager.pause(downloadId);
+  }
+
+  resumeDownload(downloadId: string) {
+    return this.downloadManager.resume(downloadId);
+  }
+
+  cancelDownload(downloadId: string) {
+    return this.downloadManager.cancel(downloadId);
+  }
+
+  openDownload(downloadId: string) {
+    return this.downloadManager.open(downloadId);
+  }
+
+  showDownloadInFolder(downloadId: string) {
+    return this.downloadManager.showInFolder(downloadId);
   }
 
   private requireActiveSession() {
@@ -726,6 +757,14 @@ export class BrowserHost {
       this.siteId = undefined;
       this.sessionId = undefined;
     }
+  }
+
+  private async flushViewSession(view: WebContentsView) {
+    if (view.webContents.isDestroyed()) {
+      return;
+    }
+
+    await flushElectronSession(view.webContents.session);
   }
 
   private unmountActiveView() {

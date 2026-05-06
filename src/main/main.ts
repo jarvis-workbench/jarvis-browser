@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, nativeImage } from "electron";
 import { join } from "node:path";
 import { registerAssetProtocol } from "./asset-protocol";
 import { BrowserHost } from "./browser-host";
@@ -10,10 +10,13 @@ import { MetadataStore } from "./store";
 const isDev = !app.isPackaged;
 const isMac = process.platform === "darwin";
 const isWin = process.platform === "win32";
+const appIconPath = join(app.getAppPath(), "assets", "app-icon.png");
+const appIcon = nativeImage.createFromPath(appIconPath);
 configureElectronDataPaths();
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | undefined;
+let isClosingMainWindow = false;
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -32,6 +35,9 @@ if (!hasSingleInstanceLock) {
   app.whenReady().then(async () => {
     registerAssetProtocol();
     registerErrorPageProtocol();
+    if (!appIcon.isEmpty()) {
+      app.dock?.setIcon(appIcon);
+    }
     await createWindow();
 
     app.on("activate", () => {
@@ -60,6 +66,7 @@ const createWindow = async () => {
         height: 38,
       }
       : undefined,
+    icon: appIcon.isEmpty() ? undefined : appIcon,
     webPreferences: {
       preload: join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -77,8 +84,20 @@ const createWindow = async () => {
     }
   });
 
+  mainWindow.on("close", (event) => {
+    if (isClosingMainWindow) {
+      return;
+    }
+
+    event.preventDefault();
+    isClosingMainWindow = true;
+    void browserHost.close().finally(() => {
+      mainWindow?.destroy();
+    });
+  });
+
   mainWindow.on("closed", () => {
-    browserHost.close();
+    isClosingMainWindow = false;
     mainWindow = undefined;
   });
 

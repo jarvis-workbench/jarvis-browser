@@ -9,7 +9,6 @@ export interface SiteSession {
   id: string;
   siteId?: string;
   name: string;
-  sessionPath: string;
   lastUrl: string;
   url?: string;
   createdAt: string;
@@ -120,9 +119,23 @@ export interface BrowserState {
 export interface DownloadState {
   id: string;
   filename: string;
+  url: string;
+  savePath: string;
+  mimeType: string;
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  startTime: number;
+  endTime?: number;
+  paused: boolean;
+  canResume: boolean;
+  speedBytesPerSecond: number;
+  errorText?: string;
+}
+
+export interface DownloadSettings {
+  downloadPath: string;
+  askWhereToSaveBeforeDownloading: boolean;
 }
 
 export interface BrowserDebugState {
@@ -164,6 +177,8 @@ export interface AppApi {
     reload(): Promise<void>;
     stop(): Promise<void>;
     showHome(): Promise<void>;
+    hideEmbeddedView(): Promise<void>;
+    showActiveView(): Promise<void>;
     setBounds(rect: BrowserRect): Promise<void>;
     close(): Promise<void>;
     closeSession(siteId: string, sessionId: string): Promise<void>;
@@ -192,6 +207,21 @@ export interface AppApi {
     enableSite(siteId: string, scriptId: string): Promise<JarvisScript>;
     disableSite(siteId: string, scriptId: string): Promise<JarvisScript>;
     uninstallSite(siteId: string, scriptId: string): Promise<void>;
+  };
+  downloads: {
+    list(): Promise<DownloadState[]>;
+    pause(downloadId: string): Promise<DownloadState>;
+    resume(downloadId: string): Promise<DownloadState>;
+    cancel(downloadId: string): Promise<DownloadState>;
+    open(downloadId: string): Promise<void>;
+    showInFolder(downloadId: string): Promise<void>;
+    remove(downloadId: string): Promise<void>;
+    clear(): Promise<void>;
+  };
+  settings: {
+    get(): Promise<DownloadSettings>;
+    update(input: Partial<DownloadSettings>): Promise<DownloadSettings>;
+    selectDownloadPath(): Promise<string | undefined>;
   };
   windowChrome: WindowChromeInfo;
   onBrowserStateChanged(callback: (state: BrowserState) => void): () => void;

@@ -66,8 +66,6 @@ export const dataPaths = {
       join(userRoot, "sites", siteId, "sessions", sessionId),
     sessionFile: (siteId: string, sessionId: string) =>
       join(userRoot, "sites", siteId, "sessions", sessionId, "session.json"),
-    sessionElectronDir: (siteId: string, sessionId: string) =>
-      join(userRoot, "sites", siteId, "sessions", sessionId, "electron-session"),
     sessionDownloadsDir: (siteId: string, sessionId: string) =>
       join(userRoot, "sites", siteId, "sessions", sessionId, "downloads"),
   },

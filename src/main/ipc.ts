@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { dialog, ipcMain } from "electron";
 import type { AppApi, BrowserRect } from "../shared/types";
 import { BrowserHost } from "./browser-host";
 import { getElectronSession } from "./electron-session-manager";
@@ -31,12 +31,10 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
   ipcMain.handle("sessions:rename", (_event, siteId: string, sessionId: string, name: string) =>
     store.renameSession(siteId, sessionId, name),
   );
-  ipcMain.handle("sessions:delete", (_event, siteId: string, sessionId: string) =>
-    {
-      browserHost.closeSession(siteId, sessionId);
-      return store.deleteSession(siteId, sessionId);
-    },
-  );
+  ipcMain.handle("sessions:delete", async (_event, siteId: string, sessionId: string) => {
+    await browserHost.closeSession(siteId, sessionId);
+    return store.deleteSession(siteId, sessionId);
+  });
   ipcMain.handle(
     "sessions:clear-data",
     async (
@@ -50,7 +48,7 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
         throw new Error("会话不存在");
       }
 
-      const targetSession = await getElectronSession(store.getSessionDataPath(siteId, sessionId));
+      const targetSession = getElectronSession(siteId, sessionId);
       await targetSession.clearStorageData({
         storages: [
           ...(options.cookies ? ["cookies" as const] : []),
@@ -73,6 +71,8 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
   ipcMain.handle("browser:reload-error-page", () => browserHost.reloadErrorPage());
   ipcMain.handle("browser:stop", () => browserHost.stop());
   ipcMain.handle("browser:show-home", () => browserHost.showHome());
+  ipcMain.handle("browser:hide-embedded-view", () => browserHost.hideEmbeddedView());
+  ipcMain.handle("browser:show-active-view", () => browserHost.showActiveView());
   ipcMain.handle("browser:set-bounds", (_event, rect: BrowserRect) => browserHost.setBounds(rect));
   ipcMain.handle("browser:close", () => browserHost.close());
   ipcMain.handle("browser:close-session", (_event, siteId: string, sessionId: string) =>
@@ -139,4 +139,22 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
     browserHost.uninstallSiteJarvisScript(siteId, scriptId),
   );
   ipcMain.handle("downloads:list", invoke(() => store.listDownloads()));
+  ipcMain.handle("downloads:pause", (_event, downloadId: string) => browserHost.pauseDownload(downloadId));
+  ipcMain.handle("downloads:resume", (_event, downloadId: string) => browserHost.resumeDownload(downloadId));
+  ipcMain.handle("downloads:cancel", (_event, downloadId: string) => browserHost.cancelDownload(downloadId));
+  ipcMain.handle("downloads:open", (_event, downloadId: string) => browserHost.openDownload(downloadId));
+  ipcMain.handle("downloads:show-in-folder", (_event, downloadId: string) => browserHost.showDownloadInFolder(downloadId));
+  ipcMain.handle("downloads:remove", (_event, downloadId: string) => store.removeDownload(downloadId));
+  ipcMain.handle("downloads:clear", invoke(() => store.clearDownloads()));
+  ipcMain.handle("settings:get", invoke(() => store.getDownloadSettings()));
+  ipcMain.handle("settings:update", (_event, input: Parameters<AppApi["settings"]["update"]>[0]) =>
+    store.updateDownloadSettings(input),
+  );
+  ipcMain.handle("settings:select-download-path", async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openDirectory", "createDirectory"],
+      defaultPath: store.getDownloadSettings().downloadPath,
+    });
+    return result.canceled ? undefined : result.filePaths[0];
+  });
 };

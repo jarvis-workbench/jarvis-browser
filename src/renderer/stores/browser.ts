@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia';
 import { computed, nextTick, ref } from 'vue';
-import type { BrowserState, Site, SiteSession } from '../../shared/types';
+import type { BrowserState, DownloadSettings, DownloadState, Site, SiteSession } from '../../shared/types';
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
-import { homeTabId, useBrowserTabs } from './browser-tabs';
+import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
 
 const fallbackBrowserState: BrowserState = {
   url: '',
@@ -20,6 +20,8 @@ export const useBrowserStore = defineStore('browser', () => {
   const address = ref('');
   const loading = ref(false);
   const statusMessage = ref('准备就绪');
+  const downloads = ref<DownloadState[]>([]);
+  const downloadSettings = ref<DownloadSettings | null>(null);
 
   const tabs = useBrowserTabs(sites);
   const selectedSite = tabs.selectedSite;
@@ -48,6 +50,14 @@ export const useBrowserStore = defineStore('browser', () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  async function loadDownloads() {
+    downloads.value = await window.appApi.downloads.list();
+  }
+
+  async function loadSettings() {
+    downloadSettings.value = await window.appApi.settings.get();
   }
 
   async function addSite(rawUrl: string) {
@@ -166,6 +176,30 @@ export const useBrowserStore = defineStore('browser', () => {
     await showHome();
   }
 
+  async function activateInternalPage(pageId: InternalPageTabId) {
+    tabs.activateInternalPage(pageId);
+    await window.appApi.browser.hideEmbeddedView();
+    if (pageId === downloadsTabId) {
+      await loadDownloads();
+      statusMessage.value = '下载内容';
+    } else {
+      await loadSettings();
+      statusMessage.value = '设置';
+    }
+  }
+
+  async function closeInternalPage(pageId: InternalPageTabId) {
+    tabs.closeInternalPage(pageId);
+    if (tabs.selectedSite.value && tabs.selectedSession.value) {
+      await openSession(tabs.selectedSite.value, tabs.selectedSession.value);
+      return;
+    }
+
+    if (tabs.activeTabId.value === homeTabId) {
+      await showHome();
+    }
+  }
+
   async function showHome() {
     tabs.activateHome();
     await window.appApi.browser.showHome();
@@ -259,6 +293,58 @@ export const useBrowserStore = defineStore('browser', () => {
     await window.appApi.browser[action]();
   }
 
+  async function hideEmbeddedView() {
+    await window.appApi.browser.hideEmbeddedView();
+  }
+
+  async function showActiveView() {
+    await window.appApi.browser.showActiveView();
+  }
+
+  async function pauseDownload(download: DownloadState) {
+    patchDownload(await window.appApi.downloads.pause(download.id));
+  }
+
+  async function resumeDownload(download: DownloadState) {
+    patchDownload(await window.appApi.downloads.resume(download.id));
+  }
+
+  async function cancelDownload(download: DownloadState) {
+    patchDownload(await window.appApi.downloads.cancel(download.id));
+  }
+
+  async function openDownload(download: DownloadState) {
+    await window.appApi.downloads.open(download.id);
+  }
+
+  async function showDownloadInFolder(download: DownloadState) {
+    await window.appApi.downloads.showInFolder(download.id);
+  }
+
+  async function removeDownload(download: DownloadState) {
+    await window.appApi.downloads.remove(download.id);
+    downloads.value = downloads.value.filter((item) => item.id !== download.id);
+  }
+
+  async function clearDownloads() {
+    await window.appApi.downloads.clear();
+    downloads.value = [];
+  }
+
+  async function updateDownloadSettings(input: Partial<DownloadSettings>) {
+    downloadSettings.value = await window.appApi.settings.update(input);
+    return downloadSettings.value;
+  }
+
+  async function selectDownloadPath() {
+    const downloadPath = await window.appApi.settings.selectDownloadPath();
+    if (!downloadPath) {
+      return undefined;
+    }
+
+    return updateDownloadSettings({ downloadPath });
+  }
+
   async function setBrowserBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
     if (!element || !tabs.selectedSession.value) {
       return;
@@ -323,6 +409,18 @@ export const useBrowserStore = defineStore('browser', () => {
     const removeScriptMessageListener = window.appApi.onJarvisScriptMessage((message) => {
       statusMessage.value = `Jarvis 脚本消息：${message.channel}`;
     });
+    const removeDownloadListener = window.appApi.onDownloadUpdated((download) => {
+      patchDownload(download);
+      if (download.state === 'progressing') {
+        statusMessage.value = download.paused ? `下载已暂停：${download.filename}` : `正在下载：${download.filename}`;
+      } else if (download.state === 'completed') {
+        statusMessage.value = `下载完成：${download.filename}`;
+      } else if (download.state === 'cancelled') {
+        statusMessage.value = `下载已取消：${download.filename}`;
+      } else {
+        statusMessage.value = `下载中断：${download.filename}`;
+      }
+    });
 
     return () => {
       removeBrowserListener();
@@ -330,6 +428,7 @@ export const useBrowserStore = defineStore('browser', () => {
       removeExtensionListener();
       removeScriptUpdateListener();
       removeScriptMessageListener();
+      removeDownloadListener();
     };
   }
 
@@ -346,6 +445,13 @@ export const useBrowserStore = defineStore('browser', () => {
     patchSite(siteId, {
       sessions: site.sessions.map((item) => (item.id === session.id ? session : item)),
     });
+  }
+
+  function patchDownload(download: DownloadState) {
+    downloads.value = [
+      download,
+      ...downloads.value.filter((item) => item.id !== download.id),
+    ];
   }
 
   async function refreshBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
@@ -380,10 +486,13 @@ export const useBrowserStore = defineStore('browser', () => {
   return {
     sites,
     homeTabId,
+    downloadsTabId,
+    settingsTabId,
     activeTabId: tabs.activeTabId,
     selectedSiteId: tabs.selectedSiteId,
     selectedSessionId: tabs.selectedSessionId,
     openTabs: tabs.openTabs,
+    openInternalTabs: tabs.openInternalTabs,
     globalExtensions: extensions.globalExtensions,
     siteExtensions: extensions.siteExtensions,
     globalScripts: scripts.globalScripts,
@@ -393,6 +502,9 @@ export const useBrowserStore = defineStore('browser', () => {
     address,
     loading,
     statusMessage,
+    downloads,
+    downloadSettings,
+    activeDownloads: computed(() => downloads.value.filter((download) => download.state === 'progressing')),
     selectedSite,
     selectedSession: tabs.selectedSession,
     openSessionTabs: tabs.openSessionTabs,
@@ -405,22 +517,37 @@ export const useBrowserStore = defineStore('browser', () => {
     updateSite,
     deleteSite,
     loadSites,
+    loadDownloads,
+    loadSettings,
     openSite,
     addSession,
     addSessionToSite,
     openSession,
     activateHome,
+    activateInternalPage,
     activateOpenTab,
     openSessionFromCurrentSite,
     openSessionFromSite,
     closeSessionTab,
+    closeInternalPage,
     renameSession,
     clearSessionData,
     deleteSession,
     navigate,
     browserAction,
+    hideEmbeddedView,
+    showActiveView,
     setBrowserBounds,
     refreshBounds,
+    pauseDownload,
+    resumeDownload,
+    cancelDownload,
+    openDownload,
+    showDownloadInFolder,
+    removeDownload,
+    clearDownloads,
+    updateDownloadSettings,
+    selectDownloadPath,
     installGlobalExtension: extensions.installGlobalExtension,
     installSiteExtension: extensions.installSiteExtension,
     toggleGlobalExtension: extensions.toggleGlobalExtension,

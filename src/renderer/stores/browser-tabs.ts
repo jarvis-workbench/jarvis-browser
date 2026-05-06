@@ -2,6 +2,10 @@ import { computed, ref, type Ref } from 'vue';
 import type { Site, SiteSession } from '../../shared/types';
 
 export const homeTabId = 'home';
+export const downloadsTabId = 'downloads';
+export const settingsTabId = 'settings';
+
+export type InternalPageTabId = typeof downloadsTabId | typeof settingsTabId;
 
 export interface OpenBrowserTab {
   id: string;
@@ -9,9 +13,26 @@ export interface OpenBrowserTab {
   sessionId: string;
 }
 
+export interface OpenInternalTab {
+  id: InternalPageTabId;
+  title: string;
+  url: string;
+}
+
+const internalPageTitles: Record<InternalPageTabId, string> = {
+  [downloadsTabId]: '下载内容',
+  [settingsTabId]: '设置',
+};
+
+export const internalPageUrls: Record<InternalPageTabId, string> = {
+  [downloadsTabId]: 'jarvis://downloads',
+  [settingsTabId]: 'jarvis://settings',
+};
+
 export function useBrowserTabs(sites: Ref<Site[]>) {
   const activeTabId = ref(homeTabId);
   const openTabs = ref<OpenBrowserTab[]>([]);
+  const openInternalTabs = ref<OpenInternalTab[]>([]);
 
   const selectedTab = computed(() => openTabs.value.find((tab) => tab.id === activeTabId.value) ?? null);
   const selectedSite = computed(() =>
@@ -37,6 +58,16 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     activeTabId.value = homeTabId;
   }
 
+  function activateInternalPage(pageId: InternalPageTabId) {
+    if (!openInternalTabs.value.some((tab) => tab.id === pageId)) {
+      openInternalTabs.value = [
+        ...openInternalTabs.value,
+        { id: pageId, title: internalPageTitles[pageId], url: internalPageUrls[pageId] },
+      ];
+    }
+    activeTabId.value = pageId;
+  }
+
   function activateSession(site: Site, session: SiteSession) {
     const tab = toOpenTab(site.id, session.id);
     if (!openTabs.value.some((item) => item.id === tab.id)) {
@@ -58,6 +89,15 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     return { closedActive: true, nextTab };
   }
 
+  function closeInternalPage(pageId: InternalPageTabId) {
+    openInternalTabs.value = openInternalTabs.value.filter((tab) => tab.id !== pageId);
+    if (activeTabId.value !== pageId) {
+      return;
+    }
+
+    activeTabId.value = openTabs.value[openTabs.value.length - 1]?.id ?? homeTabId;
+  }
+
   function removeSite(siteId: string) {
     const removedActive = selectedTab.value?.siteId === siteId;
     openTabs.value = openTabs.value.filter((tab) => tab.siteId !== siteId);
@@ -73,11 +113,13 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
   function resetTabs() {
     activeTabId.value = homeTabId;
     openTabs.value = [];
+    openInternalTabs.value = [];
   }
 
   return {
     activeTabId,
     openTabs,
+    openInternalTabs,
     selectedTab,
     selectedSite,
     selectedSiteId,
@@ -85,8 +127,10 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     selectedSessionId,
     openSessionTabs,
     activateHome,
+    activateInternalPage,
     activateSession,
     closeSession,
+    closeInternalPage,
     removeSite,
     removeSession,
     resetTabs,

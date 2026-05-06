@@ -21,6 +21,8 @@ onMounted(async () => {
   applyWindowChromeVariables();
   unbindEvents = browser.bindEvents();
   await browser.loadSites();
+  await browser.loadDownloads();
+  await browser.loadSettings();
 });
 
 onBeforeUnmount(() => {

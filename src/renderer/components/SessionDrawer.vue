@@ -282,8 +282,14 @@ function siteInitial(site: Site) {
 
     <div v-if="drawerSite" class="drawer-section">
       <div class="drawer-section__head">
-        <strong>{{ siteDisplayTitle(drawerSite) }}</strong>
-        <span>{{ isSettingsMode || showSitePicker ? drawerSite.url : selectedUrl }}</span>
+        <span class="drawer-section__site-icon">
+          <img v-if="browser.siteIconSrc(drawerSite)" :src="browser.siteIconSrc(drawerSite)" alt="" />
+          <span v-else class="site-fallback-icon">{{ siteInitial(drawerSite) }}</span>
+        </span>
+        <span class="drawer-section__site-text">
+          <strong>{{ siteDisplayTitle(drawerSite) }}</strong>
+          <span>{{ isSettingsMode || showSitePicker ? drawerSite.url : selectedUrl }}</span>
+        </span>
       </div>
     </div>
 
@@ -313,7 +319,7 @@ function siteInitial(site: Site) {
         </ElButton>
       </div>
 
-      <form v-if="creatingSession" class="session-inline" @submit.prevent="submitCreateSession">
+      <form v-if="creatingSession" class="session-inline session-inline--create" @submit.prevent="submitCreateSession">
         <ElInput v-model="creatingSessionName" size="small" placeholder="输入会话名称" autofocus />
         <ElButton native-type="submit" size="small" type="primary">创建</ElButton>
         <ElButton size="small" @click="resetCreateSession">取消</ElButton>
@@ -364,10 +370,10 @@ function siteInitial(site: Site) {
       </div>
       <div class="site-danger-zone__box">
         <span>删除站点会移除该站点下的会话数据和站点插件。</span>
-        <ElButton v-if="!pendingDeleteSite" type="danger" plain @click="beginDeleteSiteConfirm">
+        <button v-if="!pendingDeleteSite" class="site-danger-zone__delete" type="button" @click="beginDeleteSiteConfirm">
           <Delete theme="outline" size="16" />
           删除站点
-        </ElButton>
+        </button>
         <div v-else class="site-delete-confirm">
           <label class="form-field">
             <span>输入“{{ deleteSiteConfirmName }}”确认删除</span>
@@ -388,6 +394,374 @@ function siteInitial(site: Site) {
 </template>
 
 <style scoped>
+.drawer-section {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.drawer-section__head {
+  position: relative;
+  display: grid;
+  min-height: 96px;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(184, 199, 239, 0.72);
+  border-radius: 8px;
+  padding: 18px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.76), rgba(235, 230, 255, 0.58)),
+    url("/drawer-site-background.png") center / cover no-repeat;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 14px 34px rgba(75, 88, 142, 0.1);
+}
+
+.drawer-section__head::after {
+  position: absolute;
+  right: -22px;
+  bottom: -34px;
+  width: 112px;
+  height: 112px;
+  border: 1px solid rgba(148, 161, 223, 0.18);
+  border-radius: 50%;
+  content: "";
+}
+
+.drawer-section__site-icon {
+  display: inline-flex;
+  width: 52px;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 12px 28px rgba(79, 89, 140, 0.12);
+  backdrop-filter: blur(16px);
+}
+
+.drawer-section__site-icon img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.drawer-section__site-text {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.drawer-section__head strong,
+.drawer-section__site-text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-section__head strong {
+  color: #1d2744;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.drawer-section__head span {
+  color: #53617e;
+  font-size: 12px;
+}
+
+.drawer-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #1f2944;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.drawer-title span {
+  color: #1f2944;
+}
+
+.drawer-title :deep(.el-button) {
+  height: 28px;
+  border-color: rgba(128, 150, 238, 0.24);
+  background: rgba(244, 247, 255, 0.84);
+  color: #5d6fee;
+}
+
+.site-picker-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(213, 221, 239, 0.92);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #202a43;
+  text-align: left;
+  box-shadow: 0 10px 24px rgba(72, 84, 132, 0.06);
+}
+
+.site-picker-row + .site-picker-row {
+  margin-top: 8px;
+}
+
+.site-picker-row--active {
+  border-color: rgba(104, 124, 242, 0.56);
+  background: rgba(244, 247, 255, 0.9);
+}
+
+.site-picker-row__icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #5f6fee;
+}
+
+.site-picker-row__icon img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.site-picker-row span:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.site-picker-row strong,
+.site-picker-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-picker-row strong {
+  font-size: 13px;
+}
+
+.site-picker-row small {
+  color: #687490;
+  font-size: 12px;
+}
+
+.session-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  border: 1px solid rgba(213, 221, 239, 0.92);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 10px 24px rgba(72, 84, 132, 0.06);
+}
+
+.session-row--active {
+  border-color: rgba(104, 124, 242, 0.56);
+  box-shadow:
+    inset 3px 0 0 #6b7cff,
+    0 12px 28px rgba(90, 105, 192, 0.12);
+}
+
+.session-row > button {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.session-row strong,
+.session-row span {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row span {
+  color: #687490;
+  font-size: 12px;
+}
+
+.session-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-inline {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(226, 231, 243, 0.9);
+  padding-top: 10px;
+}
+
+.session-inline--create {
+  grid-column: auto;
+  grid-template-columns: minmax(0, 1fr) 58px 58px;
+  gap: 8px;
+  border: 1px solid rgba(213, 221, 239, 0.92);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 10px 24px rgba(72, 84, 132, 0.05);
+}
+
+.session-inline--create :deep(.el-input__wrapper) {
+  min-height: 34px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(206, 216, 239, 0.9) inset;
+}
+
+.session-inline--create :deep(.el-button) {
+  height: 34px;
+  min-width: 58px;
+  border-radius: 6px;
+  padding: 0;
+}
+
+.session-inline--create :deep(.el-button--primary) {
+  border: 0;
+  background: linear-gradient(90deg, #5f80ff, #7561f4);
+  color: #ffffff;
+}
+
+.session-inline--create :deep(.el-button--primary:hover),
+.session-inline--create :deep(.el-button--primary:focus) {
+  color: #ffffff;
+}
+
+.session-inline span {
+  color: #687490;
+  font-size: 12px;
+  white-space: normal;
+}
+
+.session-inline--warning,
+.session-inline--danger {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.session-inline--danger span {
+  color: #c5221f;
+}
+
+.session-row__actions .session-action-text {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(211, 219, 240, 0.96);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: rgba(249, 251, 255, 0.76);
+  color: #64718f;
+  font-size: 12px;
+}
+
+.session-row__actions .session-action-text:hover {
+  background: rgba(239, 244, 255, 0.95);
+  color: #27324a;
+}
+
+.session-row__actions .session-action-text--danger {
+  border-color: rgba(255, 205, 205, 0.95);
+  color: #ff4d4f;
+}
+
+.session-row__actions .session-action-text--danger:hover {
+  background: #fff5f5;
+  color: #d9363e;
+}
+
+.site-settings-form {
+  border-bottom: 1px solid rgba(226, 231, 243, 0.9);
+  padding-bottom: 18px;
+}
+
+.site-settings-form :deep(.drawer-actions) {
+  display: block;
+}
+
+.site-settings-form :deep(.drawer-actions .el-button) {
+  width: 100%;
+  border: 0;
+  background: linear-gradient(90deg, #5f80ff, #8957ee);
+  box-shadow: 0 14px 28px rgba(103, 113, 239, 0.24);
+}
+
+.site-settings-form :deep(.drawer-actions .el-button:hover) {
+  opacity: 0.94;
+}
+
+.site-danger-zone {
+  border-top: 1px solid rgba(226, 231, 243, 0.9);
+  padding-top: 16px;
+}
+
+.site-danger-zone__box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+  border: 1px solid rgba(255, 205, 205, 0.95);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 247, 247, 0.78);
+}
+
+.site-danger-zone__box span {
+  color: #ff4d4f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.site-danger-zone__delete {
+  display: inline-flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #ff6b6b;
+  border-radius: 18px;
+  background: transparent;
+  color: #ff4d4f;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.site-danger-zone__delete:hover {
+  border-color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.06);
+  color: #ff4d4f;
+}
+
 .site-delete-confirm {
   display: grid;
   gap: 12px;

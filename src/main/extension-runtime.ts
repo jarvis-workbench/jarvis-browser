@@ -166,9 +166,8 @@ export class ExtensionRuntime {
   private async loadForSite(site: Site, extension: SiteExtension) {
     let loaded: Electron.Extension | undefined;
     for (const siteSession of site.sessions) {
-      const sessionPath = this.store.getSessionDataPath(site.id, siteSession.id);
-      const electronSession = await getElectronSession(sessionPath);
-      this.bindSessionDownloads(sessionPath, electronSession);
+      const electronSession = getElectronSession(site.id, siteSession.id);
+      this.bindSessionDownloads(`${site.id}:${siteSession.id}`, electronSession);
       loaded = await electronSession.loadExtension(extension.path, { allowFileAccess: true });
     }
 
@@ -191,7 +190,7 @@ export class ExtensionRuntime {
   private async removeFromSite(site: Site, extensionId: string) {
     for (const siteSession of site.sessions) {
       try {
-        const electronSession = await getElectronSession(this.store.getSessionDataPath(site.id, siteSession.id));
+        const electronSession = getElectronSession(site.id, siteSession.id);
         electronSession.removeExtension(extensionId);
       } catch {
         // 插件不一定已加载到每个 session。

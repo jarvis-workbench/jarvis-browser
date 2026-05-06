@@ -25,6 +25,8 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   readonly enabled = true;
   private readonly declaredLinks = new Map<string, Map<string, DeclaredFaviconLink>>();
   private readonly cachedUrls = new Map<string, string>();
+  private readonly viewCapturePages = new Map<string, string>();
+  private readonly completedSites = new Set<string>();
 
   constructor(private readonly options: FaviconScriptOptions) {}
 
@@ -35,7 +37,16 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   needsResponseBody(event: JarvisMonitorEvent<NetworkResponsePayload>) {
-    if (!this.options.isPageSuccessful(event.context.viewKey, event.context.pageUrl)) {
+    if (this.shouldSkipSite(event.context.siteId)) {
+      return false;
+    }
+
+    const capturePageUrl = this.viewCapturePages.get(event.context.viewKey);
+    if (!capturePageUrl || !sameUrl(capturePageUrl, event.context.pageUrl)) {
+      return false;
+    }
+
+    if (!this.options.isPageSuccessful(event.context.viewKey, capturePageUrl)) {
       return false;
     }
 
@@ -44,6 +55,15 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
 
   getResponseBodyRequests(event: JarvisMonitorEvent) {
     if (event.name !== "page:html") {
+      return [];
+    }
+
+    if (this.shouldSkipSite(event.context.siteId)) {
+      return [];
+    }
+
+    const capturePageUrl = this.viewCapturePages.get(event.context.viewKey);
+    if (!capturePageUrl || !sameUrl(capturePageUrl, event.context.pageUrl)) {
       return [];
     }
 
@@ -77,9 +97,21 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   private async handlePageHtml(event: JarvisMonitorEvent<PageHtmlPayload>) {
+    if (this.shouldSkipSite(event.context.siteId)) {
+      this.clearView(event.context.viewKey);
+      return;
+    }
+
     if (!this.options.isPageSuccessful(event.context.viewKey, event.payload.pageUrl)) {
       return;
     }
+
+    const capturePageUrl = this.viewCapturePages.get(event.context.viewKey);
+    if (capturePageUrl && !sameUrl(capturePageUrl, event.payload.pageUrl)) {
+      return;
+    }
+
+    this.viewCapturePages.set(event.context.viewKey, event.payload.pageUrl);
 
     for (const declaredHref of extractDeclaredFaviconHrefs(event.payload.html)) {
       const normalized = normalizeFaviconUrl(declaredHref, event.payload.pageUrl);
@@ -90,6 +122,7 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
       if (/^data:/i.test(normalized)) {
         const faviconPath = await cacheSiteFaviconDataUrl(event.context.siteId, normalized);
         await this.options.store.updateSiteMetadata(event.context.siteId, { faviconUrl: normalized, faviconPath });
+        this.completeSite(event.context.siteId, event.context.viewKey);
         this.options.emitMetadataUpdate();
         return;
       }
@@ -99,8 +132,18 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   private async handleResponseBody(event: JarvisMonitorEvent<NetworkResponseBodyPayload>) {
+    if (this.shouldSkipSite(event.context.siteId)) {
+      this.clearView(event.context.viewKey);
+      return;
+    }
+
     const declaredLink = this.findDeclaredLink(event.context.viewKey, event.payload.url);
     if (!declaredLink || this.cachedUrls.get(event.context.viewKey) === event.payload.url) {
+      return;
+    }
+
+    const capturePageUrl = this.viewCapturePages.get(event.context.viewKey);
+    if (!capturePageUrl || !sameUrl(capturePageUrl, declaredLink.pageUrl)) {
       return;
     }
 
@@ -123,6 +166,7 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
       faviconUrl: event.payload.url,
       faviconPath,
     });
+    this.completeSite(event.context.siteId, event.context.viewKey);
     this.options.emitMetadataUpdate();
   }
 
@@ -163,6 +207,35 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
 
     return undefined;
   }
+
+  private shouldSkipSite(siteId: string) {
+    if (this.completedSites.has(siteId)) {
+      return true;
+    }
+
+    const site = this.options.store.getSite(siteId);
+    if (!site || site.faviconPath || site.faviconUrl) {
+      this.completedSites.add(siteId);
+      return true;
+    }
+
+    return false;
+  }
+
+  private completeSite(siteId: string, viewKey: string) {
+    this.completedSites.add(siteId);
+    this.clearView(viewKey);
+  }
+
+  private clearView(viewKey: string) {
+    this.declaredLinks.delete(viewKey);
+    this.cachedUrls.delete(viewKey);
+    this.viewCapturePages.delete(viewKey);
+  }
+}
+
+function sameUrl(left: string, right: string) {
+  return normalizeComparableUrl(left) === normalizeComparableUrl(right);
 }
 
 function normalizeComparableUrl(url: string) {
