@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, BrowserRect, BrowserState, DownloadSettings, DownloadState, JarvisScript, JarvisScriptMessage, Site, SiteExtension, WindowChromeInfo } from "../shared/types";
+import type { AppApi, BrowserRect, BrowserState, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, JarvisScript, JarvisScriptMessage, Site, SiteExtension, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -62,6 +62,12 @@ const appApi: AppApi = {
     enableSite: (siteId, extensionId) => invoke("extensions:enable-site", siteId, extensionId),
     disableSite: (siteId, extensionId) => invoke("extensions:disable-site", siteId, extensionId),
     uninstallSite: (siteId, extensionId) => invoke("extensions:uninstall-site", siteId, extensionId),
+    openPopup: (input) => invoke("extensions:open-popup", input),
+    closePopup: () => invoke("extensions:close-popup"),
+  },
+  extensionPopup: {
+    cookiesSet: (details: CookieSetDetails) => invoke("extension-popup:cookies-set", details),
+    cookiesRemove: (details: CookieRemoveDetails) => invoke("extension-popup:cookies-remove", details),
   },
   jarvisScripts: {
     listGlobal: () => invoke<JarvisScript[]>("jarvis-scripts:list-global"),

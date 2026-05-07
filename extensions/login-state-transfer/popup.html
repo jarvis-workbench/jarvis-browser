@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login State Transfer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <div>
+          <strong>登录态迁移</strong>
+          <span id="browser-name">Chrome / Jarvis Browser</span>
+        </div>
+      </header>
+
+      <section class="current-tab">
+        <span>当前页面</span>
+        <strong id="current-origin">读取中...</strong>
+      </section>
+
+      <section class="actions">
+        <button id="export-state" class="primary" type="button">导出当前网站状态</button>
+        <label class="file-button" for="state-file">选择状态文件导入</label>
+        <input id="state-file" type="file" accept="application/json,.json" />
+      </section>
+
+      <section id="preview" class="preview hidden">
+        <div class="preview-row">
+          <span>文件来源</span>
+          <strong id="preview-origin"></strong>
+        </div>
+        <div class="preview-row">
+          <span>导出时间</span>
+          <strong id="preview-time"></strong>
+        </div>
+        <div class="summary-grid" id="preview-summary"></div>
+        <label class="check-row">
+          <input id="clear-before-import" type="checkbox" checked />
+          <span>导入前清空当前 origin 的同类状态</span>
+        </label>
+        <label class="check-row warning">
+          <input id="allow-origin-mismatch" type="checkbox" />
+          <span>允许导入到不同 origin</span>
+        </label>
+        <button id="import-state" class="primary" type="button" disabled>导入到当前页面</button>
+      </section>
+
+      <section id="status" class="status" aria-live="polite"></section>
+      <section id="report" class="report hidden"></section>
+    </main>
+
+    <script src="state-format.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

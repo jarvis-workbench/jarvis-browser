@@ -5,6 +5,23 @@ export interface BrowserRect {
   height: number;
 }
 
+export interface CookieSetDetails {
+  url: string;
+  name: string;
+  value: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  expirationDate?: number;
+  sameSite?: "unspecified" | "no_restriction" | "lax" | "strict";
+}
+
+export interface CookieRemoveDetails {
+  url: string;
+  name: string;
+}
+
 export interface SiteSession {
   id: string;
   siteId?: string;
@@ -22,10 +39,17 @@ export interface SiteExtension {
   path: string;
   enabled: boolean;
   permissions: string[];
+  action?: SiteExtensionAction;
   icon?: string;
   loadError?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SiteExtensionAction {
+  defaultPopup: string;
+  defaultTitle?: string;
+  icon?: string;
 }
 
 export type JarvisScriptScope = "global" | "site";
@@ -195,6 +219,12 @@ export interface AppApi {
     enableSite(siteId: string, extensionId: string): Promise<SiteExtension>;
     disableSite(siteId: string, extensionId: string): Promise<SiteExtension>;
     uninstallSite(siteId: string, extensionId: string): Promise<void>;
+    openPopup(input: { siteId: string; sessionId: string; extensionId: string; anchor: BrowserRect }): Promise<void>;
+    closePopup(): Promise<void>;
+  };
+  extensionPopup: {
+    cookiesSet(details: CookieSetDetails): Promise<void>;
+    cookiesRemove(details: CookieRemoveDetails): Promise<void>;
   };
   jarvisScripts: {
     listGlobal(): Promise<JarvisScript[]>;

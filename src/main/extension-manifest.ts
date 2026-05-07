@@ -8,21 +8,41 @@ type ExtensionManifest = {
   permissions?: string[];
   host_permissions?: string[];
   icons?: Record<string, string>;
+  action?: ExtensionActionManifest;
+  browser_action?: ExtensionActionManifest;
+};
+
+type ExtensionActionManifest = {
+  default_popup?: string;
+  default_title?: string;
+  default_icon?: string | Record<string, string>;
 };
 
 export async function createExtensionFromPath(extensionPath: string): Promise<SiteExtension> {
-  const manifest = await readManifest(extensionPath);
+  const metadata = await readExtensionManifestMetadata(extensionPath);
   const timestamp = new Date().toISOString();
   return {
     id: stablePathId(extensionPath),
-    name: manifest.name || basename(extensionPath),
-    version: manifest.version || "unknown",
+    name: metadata.name || basename(extensionPath),
+    version: metadata.version,
     path: extensionPath,
     enabled: true,
-    permissions: [...(manifest.permissions ?? []), ...(manifest.host_permissions ?? [])],
-    icon: resolveExtensionIcon(extensionPath, manifest.icons),
+    permissions: metadata.permissions,
+    action: metadata.action,
+    icon: metadata.icon,
     createdAt: timestamp,
     updatedAt: timestamp,
+  };
+}
+
+export async function readExtensionManifestMetadata(extensionPath: string) {
+  const manifest = await readManifest(extensionPath);
+  return {
+    name: manifest.name || basename(extensionPath),
+    version: manifest.version || "unknown",
+    permissions: [...(manifest.permissions ?? []), ...(manifest.host_permissions ?? [])],
+    action: resolveExtensionAction(extensionPath, manifest),
+    icon: resolveExtensionIcon(extensionPath, manifest.icons),
   };
 }
 
@@ -36,8 +56,32 @@ async function readManifest(extensionPath: string) {
 }
 
 function resolveExtensionIcon(extensionPath: string, icons?: Record<string, string>) {
-  const largest = Object.entries(icons ?? {}).sort((a, b) => Number(b[0]) - Number(a[0]))[0]?.[1];
-  return largest ? join(extensionPath, largest) : undefined;
+  return resolveIconPath(extensionPath, icons);
+}
+
+function resolveExtensionAction(extensionPath: string, manifest: ExtensionManifest) {
+  const action = manifest.action ?? manifest.browser_action;
+  const defaultPopup = action?.default_popup?.trim();
+  if (!defaultPopup) {
+    return undefined;
+  }
+
+  return {
+    defaultPopup,
+    defaultTitle: action?.default_title || manifest.name,
+    icon: resolveIconPath(extensionPath, action?.default_icon),
+  };
+}
+
+function resolveIconPath(extensionPath: string, icon?: string | Record<string, string>) {
+  if (!icon) {
+    return undefined;
+  }
+
+  const iconPath = typeof icon === "string"
+    ? icon
+    : Object.entries(icon).sort((a, b) => Number(b[0]) - Number(a[0]))[0]?.[1];
+  return iconPath ? join(extensionPath, iconPath) : undefined;
 }
 
 function stablePathId(path: string) {

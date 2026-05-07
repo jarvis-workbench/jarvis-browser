@@ -566,119 +566,6 @@ button:disabled {
   text-align: center;
 }
 
-.extension-panel {
-  display: grid;
-  gap: 22px;
-}
-
-.extension-panel__section {
-  display: grid;
-  gap: 12px;
-}
-
-.extension-panel__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid #edf0f2;
-  padding-bottom: 10px;
-}
-
-.extension-panel__head div {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.extension-panel__head strong {
-  color: #202124;
-  font-size: 15px;
-}
-
-.extension-panel__head span {
-  color: #5f6368;
-  font-size: 12px;
-}
-
-.extension-card {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  border: 1px solid #dadce0;
-  border-radius: 8px;
-  padding: 12px;
-  background: #ffffff;
-}
-
-.extension-card__icon {
-  display: inline-flex;
-  width: 36px;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #f1f3f4;
-  color: #3c4043;
-}
-
-.extension-card__icon img {
-  width: 24px;
-  height: 24px;
-}
-
-.extension-card__main {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.extension-card__main strong,
-.extension-card__main span,
-.extension-card__main p {
-  overflow: hidden;
-  margin: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.extension-card__main strong {
-  color: #202124;
-  font-size: 14px;
-}
-
-.extension-card__main span,
-.extension-card__main p {
-  color: #5f6368;
-  font-size: 12px;
-}
-
-.extension-card__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.extension-card__actions button {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #5f6368;
-}
-
-.extension-card__actions button:hover {
-  background: #f1f3f4;
-  color: #d93025;
-}
-
 .create-session-form {
   display: grid;
   gap: 12px;
@@ -741,9 +628,15 @@ button:disabled {
   font-weight: 600;
 }
 
+.downloads-page {
+  height: 100%;
+  overflow: hidden;
+}
+
 .downloads-page__body {
   display: grid;
   height: 100%;
+  min-height: 0;
   max-width: 980px;
   width: 100%;
   align-content: start;

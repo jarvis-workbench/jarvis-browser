@@ -19,7 +19,7 @@ import {
   ElMessage,
 } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { Site, SiteSession } from '../../shared/types';
+import type { BrowserRect, Site, SiteExtension, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import ExtensionManager from '../components/ExtensionManager.vue';
 import JarvisScriptManager from '../components/JarvisScriptManager.vue';
@@ -92,6 +92,9 @@ const downloadProgress = computed(() => {
 });
 
 async function setActivePanel(panel: ActivePanel) {
+  if (panel) {
+    await browser.closeExtensionPopup();
+  }
   activePanel.value = panel;
   tabPickerVisible.value = panel === 'tabPicker';
   sessionDrawerVisible.value = panel === 'sessionDrawer';
@@ -213,6 +216,53 @@ async function browserAction(action: 'back' | 'forward' | 'reload' | 'stop') {
   } catch (error) {
     ElMessage.error(formatError(error));
   }
+}
+
+async function openExtensionPopup(extension: SiteExtension, event: MouseEvent) {
+  try {
+    await browser.openExtensionPopup(extension, elementAnchor(event.currentTarget));
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+function extensionActionIcon(extension: SiteExtension) {
+  return toImageSrc(extension.action?.icon || extension.icon);
+}
+
+function extensionActionTitle(extension: SiteExtension) {
+  return extension.action?.defaultTitle || extension.name;
+}
+
+function elementAnchor(target: EventTarget | null): BrowserRect {
+  const element = target as HTMLElement | null;
+  if (!element) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  const rect = element.getBoundingClientRect();
+  return {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+}
+
+function toImageSrc(value?: string) {
+  if (!value) {
+    return '';
+  }
+
+  if (/^(https?:|file:|data:|jarvis-asset:)/i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith('/')) {
+    return `file://${value.split('/').map(encodeURIComponent).join('/')}`;
+  }
+
+  return value;
 }
 
 async function closeSessionTab(site: Site, session: SiteSession) {
@@ -444,6 +494,23 @@ watch(
           />
         </div>
 
+        <div
+          class="chrome-extension-actions"
+          :class="{ 'chrome-extension-actions--empty': browser.popupExtensions.length === 0 }"
+          aria-label="插件面板"
+        >
+          <button
+            v-for="extension in browser.popupExtensions"
+            :key="extension.id"
+            type="button"
+            :title="extensionActionTitle(extension)"
+            @click="openExtensionPopup(extension, $event)"
+          >
+            <img v-if="extensionActionIcon(extension)" :src="extensionActionIcon(extension)" alt="" />
+            <Plug v-else theme="outline" size="17" />
+          </button>
+        </div>
+
         <button
           type="button"
           title="会话管理"
@@ -567,11 +634,11 @@ watch(
 
 <style scoped>
 .chrome-toolbar {
-  grid-template-columns: repeat(3, 32px) minmax(36px, max-content) minmax(220px, 1fr) repeat(5, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(36px, max-content) minmax(220px, 1fr) max-content repeat(5, 32px);
 }
 
 .chrome-toolbar--without-session {
-  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(5, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) max-content repeat(5, 32px);
 }
 
 .chrome-session-name {
@@ -604,6 +671,44 @@ watch(
 .chrome-session-name__text {
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.chrome-extension-actions {
+  display: flex;
+  max-width: 116px;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.chrome-extension-actions--empty {
+  width: 0;
+}
+
+.chrome-extension-actions button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #3c4043;
+  -webkit-app-region: no-drag;
+}
+
+.chrome-extension-actions button:hover {
+  background: #e8eaed;
+}
+
+.chrome-extension-actions img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .chrome-toolbar .chrome-toolbar-button--active,

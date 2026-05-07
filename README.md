@@ -67,6 +67,8 @@
 - **全局插件**：打开任意站点会话时加载。
 - **站点插件**：只作用于指定站点的会话。
 - **生命周期管理**：支持安装、启用、停用、卸载和加载错误展示。
+- **Chrome 风格 popup**：带 `action.default_popup` 的扩展会在工具栏显示 action 图标，点击后由主进程创建独立 `BrowserWindow` 浮层承载真实 `chrome-extension://...` 页面。
+- **登录态迁移桥接**：Jarvis 扩展 popup 可通过专用 preload 调用当前会话的 Electron `session.cookies`，用于补齐 Electron 扩展运行时缺失的 `chrome.cookies` 写入能力。
 
 ### Local Data
 
@@ -87,6 +89,7 @@ flowchart TD
   Main --> BrowserHost["Browser Host<br/>WebContentsView Registry"]
   BrowserHost --> WebViewA["Site Session A<br/>Electron Session"]
   BrowserHost --> WebViewB["Site Session B<br/>Electron Session"]
+  BrowserHost --> PopupWindow["Popup Window Manager<br/>Extension Action Popup"]
   Main --> Monitor["Jarvis Monitor<br/>page events + html"]
   Monitor --> ScriptRuntime["Jarvis Script Runtime"]
   Main --> ExtensionRuntime["Extension Runtime"]
@@ -118,13 +121,15 @@ jarvis-browser/
 │   │   ├── browser-host/monitor/  # 顶层页面监控事件
 │   │   ├── jarvis-script/         # Jarvis Script 管理与运行时
 │   │   ├── extension-runtime.ts   # 全局插件和站点插件运行时
+│   │   ├── popup-window-manager.ts # 主进程浮层窗口，承载扩展 action popup
 │   │   ├── favicon-cache.ts       # favicon 本地缓存
 │   │   ├── store.ts               # 站点、会话、插件、下载元数据
 │   │   └── main.ts                # Electron 主进程入口
 │   │
 │   ├── preload/
-│   │   ├── preload.ts             # Renderer IPC 桥
-│   │   └── error-page-preload.ts  # 内置错误页 IPC 桥
+│   │   ├── preload.ts                 # Renderer IPC 桥
+│   │   ├── extension-popup-preload.ts # 扩展 popup IPC 桥
+│   │   └── error-page-preload.ts      # 内置错误页 IPC 桥
 │   │
 │   ├── renderer/
 │   │   ├── components/            # 抽屉、插件管理、脚本管理、会话管理
@@ -256,6 +261,7 @@ npm run typecheck
 | Jarvis Script | 面向站点的自动化脚本 |
 | Global Extension | 所有站点会话都会加载的扩展 |
 | Site Extension | 只在指定站点会话中加载的扩展 |
+| Extension Popup | 由独立 BrowserWindow 承载的扩展 action 面板 |
 | Internal Page | Jarvis Browser 自身的下载、设置等工作台页面 |
 
 <br/>

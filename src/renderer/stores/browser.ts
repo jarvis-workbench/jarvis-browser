@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, nextTick, ref } from 'vue';
-import type { BrowserState, DownloadSettings, DownloadState, Site, SiteSession } from '../../shared/types';
+import type { BrowserRect, BrowserState, DownloadSettings, DownloadState, Site, SiteExtension, SiteSession } from '../../shared/types';
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
 import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
@@ -336,6 +336,24 @@ export const useBrowserStore = defineStore('browser', () => {
     return downloadSettings.value;
   }
 
+  async function openExtensionPopup(extension: SiteExtension, anchor: BrowserRect) {
+    if (!selectedSite.value || !tabs.selectedSession.value) {
+      throw new Error('请选择会话');
+    }
+
+    await window.appApi.extensions.openPopup({
+      siteId: selectedSite.value.id,
+      sessionId: tabs.selectedSession.value.id,
+      extensionId: extension.id,
+      anchor,
+    });
+    statusMessage.value = `${extension.action?.defaultTitle || extension.name} 面板已打开`;
+  }
+
+  async function closeExtensionPopup() {
+    await window.appApi.extensions.closePopup();
+  }
+
   async function selectDownloadPath() {
     const downloadPath = await window.appApi.settings.selectDownloadPath();
     if (!downloadPath) {
@@ -495,6 +513,7 @@ export const useBrowserStore = defineStore('browser', () => {
     openInternalTabs: tabs.openInternalTabs,
     globalExtensions: extensions.globalExtensions,
     siteExtensions: extensions.siteExtensions,
+    popupExtensions: extensions.popupExtensions,
     globalScripts: scripts.globalScripts,
     siteScripts: scripts.siteScripts,
     browserState,
@@ -554,6 +573,8 @@ export const useBrowserStore = defineStore('browser', () => {
     toggleSiteExtension: extensions.toggleSiteExtension,
     uninstallGlobalExtension: extensions.uninstallGlobalExtension,
     uninstallSiteExtension: extensions.uninstallSiteExtension,
+    openExtensionPopup,
+    closeExtensionPopup,
     installGlobalScript: scripts.installGlobalScript,
     installSiteScript: scripts.installSiteScript,
     toggleGlobalScript: scripts.toggleGlobalScript,

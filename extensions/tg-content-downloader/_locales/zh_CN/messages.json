@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "Jarvis TG 内容下载器"
+  },
+  "extDescription": {
+    "message": "从 Telegram Web 下载当前可见的视频、图片、故事和音频。"
+  }
+}

@@ -1,5 +1,5 @@
 import { dialog, ipcMain } from "electron";
-import type { AppApi, BrowserRect } from "../shared/types";
+import type { AppApi, BrowserRect, CookieRemoveDetails, CookieSetDetails } from "../shared/types";
 import { BrowserHost } from "./browser-host";
 import { getElectronSession } from "./electron-session-manager";
 import { MetadataStore } from "./store";
@@ -108,6 +108,18 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
   );
   ipcMain.handle("extensions:uninstall-site", (_event, siteId: string, extensionId: string) =>
     browserHost.uninstallSiteExtension(siteId, extensionId),
+  );
+  ipcMain.handle(
+    "extensions:open-popup",
+    (_event, input: Parameters<AppApi["extensions"]["openPopup"]>[0]) =>
+      browserHost.openExtensionPopup(input),
+  );
+  ipcMain.handle("extensions:close-popup", () => browserHost.closeExtensionPopup());
+  ipcMain.handle("extension-popup:cookies-set", (_event, details: CookieSetDetails) =>
+    browserHost.setActiveSessionCookie(details),
+  );
+  ipcMain.handle("extension-popup:cookies-remove", (_event, details: CookieRemoveDetails) =>
+    browserHost.removeActiveSessionCookie(details),
   );
 
   ipcMain.handle("jarvis-scripts:list-global", invoke(() => browserHost.listGlobalJarvisScripts()));

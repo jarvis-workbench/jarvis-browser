@@ -1,4 +1,4 @@
-import { ref, type ComputedRef, type Ref } from 'vue';
+import { computed, ref, type ComputedRef } from 'vue';
 import type { Site, SiteExtension } from '../../shared/types';
 
 type BrowserExtensionsOptions = {
@@ -10,6 +10,11 @@ type BrowserExtensionsOptions = {
 export function useBrowserExtensions(options: BrowserExtensionsOptions) {
   const globalExtensions = ref<SiteExtension[]>([]);
   const siteExtensions = ref<SiteExtension[]>([]);
+  const popupExtensions = computed(() =>
+    [...globalExtensions.value, ...siteExtensions.value].filter((extension) =>
+      extension.enabled && Boolean(extension.action?.defaultPopup),
+    ),
+  );
 
   async function loadExtensions(siteId: string) {
     const [nextGlobalExtensions, nextSiteExtensions] = await Promise.all([
@@ -101,6 +106,7 @@ export function useBrowserExtensions(options: BrowserExtensionsOptions) {
   return {
     globalExtensions,
     siteExtensions,
+    popupExtensions,
     loadExtensions,
     installGlobalExtension,
     installSiteExtension,

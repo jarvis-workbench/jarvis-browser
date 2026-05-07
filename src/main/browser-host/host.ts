@@ -3,7 +3,7 @@ import {
   WebContentsView,
 } from "electron";
 import { join } from "node:path";
-import type { BrowserRect, BrowserState } from "../../shared/types";
+import type { BrowserRect, BrowserState, CookieRemoveDetails, CookieSetDetails } from "../../shared/types";
 import { clampBrowserBounds, defaultBrowserBounds } from "../browser-bounds";
 import { DownloadManager } from "../download-manager";
 import { createErrorPageUrl, isInternalErrorPageUrl, registerErrorPageProtocolForSession } from "../error-page";
@@ -11,6 +11,7 @@ import { flushElectronSession, getElectronSession } from "../electron-session-ma
 import { ExtensionRuntime } from "../extension-runtime";
 import { JarvisScriptManager } from "../jarvis-script/manager";
 import { JarvisScriptRuntime } from "../jarvis-script/runtime";
+import { PopupWindowManager } from "../popup-window-manager";
 import { MetadataStore, normalizeHttpUrl } from "../store";
 import { createViewKey, parseViewKey } from "./keys";
 import { ViewLifecycle } from "./lifecycle";
@@ -35,12 +36,14 @@ export class BrowserHost {
   private readonly jarvisScriptRuntime: JarvisScriptRuntime;
   private readonly jarvisScriptManager: JarvisScriptManager;
   private readonly viewRegistry: ViewRegistry;
+  private readonly popupWindowManager: PopupWindowManager;
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly store: MetadataStore,
   ) {
     this.viewRegistry = new ViewRegistry(window, this.views, () => this.bounds);
+    this.popupWindowManager = new PopupWindowManager(window);
     this.downloadManager = new DownloadManager(window, store);
     this.extensionRuntime = new ExtensionRuntime(window, store, (key, targetSession) => {
       this.downloadManager.bindSession(key, targetSession);
@@ -64,6 +67,7 @@ export class BrowserHost {
       throw new Error("会话不存在");
     }
 
+    this.popupWindowManager.closePopup();
     this.siteId = siteId;
     this.sessionId = sessionId;
     const viewKey = createViewKey(siteId, sessionId);
@@ -201,6 +205,7 @@ export class BrowserHost {
   }
 
   showHome() {
+    this.popupWindowManager.closePopup();
     this.siteId = undefined;
     this.sessionId = undefined;
     this.unmountActiveView();
@@ -208,6 +213,7 @@ export class BrowserHost {
   }
 
   hideEmbeddedView() {
+    this.popupWindowManager.closePopup();
     this.unmountActiveView();
   }
 
@@ -223,6 +229,7 @@ export class BrowserHost {
   }
 
   async close() {
+    this.popupWindowManager.closePopup();
     for (const [viewKey, view] of this.views) {
       await this.flushViewSession(view);
       this.destroyView(viewKey, view);
@@ -240,6 +247,9 @@ export class BrowserHost {
   }
 
   async closeSession(siteId: string, sessionId: string) {
+    if (this.siteId === siteId && this.sessionId === sessionId) {
+      this.popupWindowManager.closePopup();
+    }
     const viewKey = createViewKey(siteId, sessionId);
     const view = this.views.get(viewKey);
     if (view) {
@@ -288,10 +298,12 @@ export class BrowserHost {
   }
 
   async disableGlobalExtension(extensionId: string) {
+    this.popupWindowManager.closePopup();
     return this.extensionRuntime.disableGlobal(extensionId);
   }
 
   async uninstallGlobalExtension(extensionId: string) {
+    this.popupWindowManager.closePopup();
     await this.extensionRuntime.uninstallGlobal(extensionId);
   }
 
@@ -300,11 +312,60 @@ export class BrowserHost {
   }
 
   async disableSiteExtension(siteId: string, extensionId: string) {
+    this.popupWindowManager.closePopup();
     return this.extensionRuntime.disableSite(siteId, extensionId);
   }
 
   async uninstallSiteExtension(siteId: string, extensionId: string) {
+    this.popupWindowManager.closePopup();
     await this.extensionRuntime.uninstallSite(siteId, extensionId);
+  }
+
+  async openExtensionPopup(input: { siteId: string; sessionId: string; extensionId: string; anchor: BrowserRect }) {
+    if (this.siteId !== input.siteId || this.sessionId !== input.sessionId) {
+      throw new Error("插件面板只能在当前活跃会话中打开");
+    }
+
+    const site = this.store.getSite(input.siteId);
+    const session = this.store.getSession(input.siteId, input.sessionId);
+    if (!site || !session) {
+      throw new Error("会话不存在");
+    }
+
+    const extension = this.store.getGlobalExtension(input.extensionId)
+      ?? site.extensions.find((item) => item.id === input.extensionId);
+    if (!extension || !extension.enabled) {
+      throw new Error("插件未启用");
+    }
+
+    await this.popupWindowManager.openExtensionPopup({
+      kind: "extension-action",
+      siteId: input.siteId,
+      sessionId: input.sessionId,
+      extension,
+      anchor: input.anchor,
+      targetTab: {
+        id: this.getActiveView().webContents.id,
+        url: this.getActiveView().webContents.getURL(),
+        title: this.getActiveView().webContents.getTitle(),
+      },
+    });
+  }
+
+  closeExtensionPopup() {
+    this.popupWindowManager.closePopup();
+  }
+
+  async setActiveSessionCookie(details: CookieSetDetails) {
+    const active = this.requireActiveSession();
+    const targetSession = getElectronSession(active.siteId, active.sessionId);
+    await targetSession.cookies.set(toElectronCookieSetDetails(details));
+  }
+
+  async removeActiveSessionCookie(details: CookieRemoveDetails) {
+    const active = this.requireActiveSession();
+    const targetSession = getElectronSession(active.siteId, active.sessionId);
+    await targetSession.cookies.remove(details.url, details.name);
   }
 
   listGlobalJarvisScripts() {
@@ -770,4 +831,18 @@ export class BrowserHost {
   private unmountActiveView() {
     this.viewRegistry.unmountActiveView();
   }
+}
+
+function toElectronCookieSetDetails(details: CookieSetDetails): Electron.CookiesSetDetails {
+  return {
+    url: details.url,
+    name: details.name,
+    value: details.value,
+    domain: details.domain,
+    path: details.path,
+    secure: details.secure,
+    httpOnly: details.httpOnly,
+    expirationDate: details.expirationDate,
+    sameSite: details.sameSite,
+  };
 }

@@ -5,5 +5,6 @@ import type { AppApi } from '../shared/types';
 declare global {
   interface Window {
     appApi: AppApi;
+    jarvisExtensionPopup?: AppApi['extensionPopup'];
   }
 }

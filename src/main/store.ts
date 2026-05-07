@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import type { DownloadSettings, DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
 import { createSiteFaviconAssetUrl } from "./asset-protocol";
 import { dataPaths } from "./data-paths";
+import { readExtensionManifestMetadata } from "./extension-manifest";
 import { createJarvisScriptFromPath } from "./jarvis-script/manifest";
 
 type SiteIndexItem = Pick<Site, "id" | "title" | "name" | "url" | "faviconUrl" | "faviconPath" | "createdAt" | "updatedAt">;
@@ -63,7 +64,9 @@ export class MetadataStore {
     await ensureBaseDirectories();
     this.profile = await readJson<ProfileFile>(dataPaths.profileFile, createDefaultProfile());
     this.downloadSettings = normalizeDownloadSettings(this.profile.downloadSettings);
-    this.globalExtensions = await readJson<SiteExtension[]>(dataPaths.global.extensionsIndexFile, []);
+    this.globalExtensions = await hydrateExtensionsMetadata(
+      await readJson<SiteExtension[]>(dataPaths.global.extensionsIndexFile, []),
+    );
     this.globalJarvisScripts = await readJson<JarvisScript[]>(dataPaths.global.jarvisScriptsIndexFile, []);
     this.downloads = (await readJson<DownloadState[]>(dataPaths.global.downloadsFile, []))
       .map(normalizeDownloadState)
@@ -474,6 +477,9 @@ export class MetadataStore {
     const sourceDir = dataPaths.global.extensionSourceDir(extension.id);
     await replaceDirectory(sourcePath, sourceDir);
     extension.icon = remapInstalledPath(sourcePath, sourceDir, extension.icon);
+    if (extension.action?.icon) {
+      extension.action.icon = remapInstalledPath(sourcePath, sourceDir, extension.action.icon);
+    }
     extension.path = sourceDir;
     await writeJson(dataPaths.global.extensionManifestFile(extension.id), extension);
     return extension;
@@ -484,6 +490,9 @@ export class MetadataStore {
     const sourceDir = dataPaths.sites.extensionSourceDir(siteId, extension.id);
     await replaceDirectory(sourcePath, sourceDir);
     extension.icon = remapInstalledPath(sourcePath, sourceDir, extension.icon);
+    if (extension.action?.icon) {
+      extension.action.icon = remapInstalledPath(sourcePath, sourceDir, extension.action.icon);
+    }
     extension.path = sourceDir;
     await writeJson(dataPaths.sites.extensionManifestFile(siteId, extension.id), extension);
     return extension;
@@ -500,7 +509,9 @@ export class MetadataStore {
       }
 
       site.sessions = await this.loadSessions(site.id);
-      site.extensions = await readJson<SiteExtension[]>(dataPaths.sites.extensionsIndexFile(site.id), []);
+      site.extensions = await hydrateExtensionsMetadata(
+        await readJson<SiteExtension[]>(dataPaths.sites.extensionsIndexFile(site.id), []),
+      );
       site.jarvisScripts = await readJson<JarvisScript[]>(dataPaths.sites.jarvisScriptsIndexFile(site.id), []);
       sites.push(site);
     }
@@ -729,6 +740,28 @@ function normalizeDownloadState(input: Partial<DownloadState>): DownloadState {
     speedBytesPerSecond: input.speedBytesPerSecond ?? 0,
     errorText: input.errorText,
   };
+}
+
+async function hydrateExtensionsMetadata(extensions: SiteExtension[]) {
+  return Promise.all(extensions.map(async (extension) => {
+    if (extension.action?.defaultPopup) {
+      return extension;
+    }
+
+    try {
+      const metadata = await readExtensionManifestMetadata(extension.path);
+      return {
+        ...extension,
+        name: extension.name || metadata.name,
+        version: extension.version || metadata.version,
+        permissions: extension.permissions?.length ? extension.permissions : metadata.permissions,
+        action: extension.action ?? metadata.action,
+        icon: extension.icon ?? metadata.icon,
+      };
+    } catch {
+      return extension;
+    }
+  }));
 }
 
 function toSiteIndexItem(site: Site): SiteIndexItem {
