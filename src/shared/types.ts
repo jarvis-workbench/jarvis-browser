@@ -129,15 +129,79 @@ export interface Site {
 }
 
 export interface BrowserState {
+  tabId?: string;
+  kind?: BrowserTabKind;
   siteId?: string;
   sessionId?: string;
+  partition?: string;
   url: string;
   displayUrl?: string;
   title: string;
+  favicon?: string;
   canGoBack: boolean;
   canGoForward: boolean;
   isLoading: boolean;
   errorText?: string;
+}
+
+export type BrowserTabKind = "internal" | "site" | "default";
+
+export type BrowserInternalPageId =
+  | "newtab"
+  | "downloads"
+  | "settings"
+  | "extensions"
+  | "jarvis-script"
+  | "history"
+  | "clear-browsing-data";
+
+export interface BrowserTab {
+  id: string;
+  kind: BrowserTabKind;
+  url: string;
+  title: string;
+  favicon?: string;
+  siteId?: string;
+  sessionId?: string;
+  partition: string;
+  openerTabId?: string;
+  internalPageId?: BrowserInternalPageId;
+  pinnedExtensionIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateBrowserTabInput {
+  url?: string;
+  openerTabId?: string;
+}
+
+export interface CreateSiteTabInput {
+  siteId: string;
+  sessionId: string;
+}
+
+export interface OpenInternalPageInput {
+  pageId: BrowserInternalPageId;
+}
+
+export type BrowserNavigationResult =
+  | {
+    kind: "loaded";
+    url: string;
+  }
+  | {
+    kind: "external-opened";
+    url: string;
+  }
+  | {
+    kind: "blocked";
+    url: string;
+    errorText: string;
+  };
+
+export interface TabState extends BrowserState {
+  tabId: string;
 }
 
 export interface DownloadState {
@@ -162,9 +226,81 @@ export interface DownloadSettings {
   askWhereToSaveBeforeDownloading: boolean;
 }
 
+export interface HistoryRecord {
+  id: string;
+  tabId?: string;
+  siteId?: string;
+  sessionId?: string;
+  partition: string;
+  origin: string;
+  url: string;
+  title?: string;
+  visitedAt: string;
+  createdAt: string;
+}
+
+export interface HistoryListInput {
+  partition?: string;
+  origin?: string;
+  siteId?: string;
+  sessionId?: string;
+  limit?: number;
+}
+
+export interface HistoryClearInput {
+  partition?: string;
+  origin?: string;
+  siteId?: string;
+  sessionId?: string;
+}
+
+export type BrowserStorageType =
+  | "cookies"
+  | "filesystem"
+  | "indexdb"
+  | "localstorage"
+  | "shadercache"
+  | "websql"
+  | "serviceworkers"
+  | "cachestorage";
+
+export interface StorageStatsInput {
+  partition?: string;
+  origin?: string;
+}
+
+export interface StorageOriginStats {
+  origin: string;
+  historyCount: number;
+  lastVisitedAt?: string;
+  cookieCount: number;
+  cookieBytes: number;
+}
+
+export interface StoragePartitionStats {
+  partition: string;
+  cacheBytes: number;
+  storagePath?: string;
+  originCount: number;
+  origins: StorageOriginStats[];
+}
+
+export interface StorageClearDataInput {
+  partition: string;
+  origin?: string;
+  storages?: BrowserStorageType[];
+  clearCache?: boolean;
+}
+
+export interface StorageClearDataResult {
+  partition: string;
+  origin?: string;
+  storagesCleared: BrowserStorageType[];
+  cacheCleared: boolean;
+}
+
 export interface BrowserDebugState {
-  activeSiteId?: string;
-  activeSessionId?: string;
+  activeTabId?: string;
   viewCount: number;
   viewKeys: string[];
 }
@@ -195,7 +331,14 @@ export interface AppApi {
   };
   browser: {
     open(siteId: string, sessionId: string): Promise<void>;
-    navigate(url: string): Promise<void>;
+    createTab(input?: CreateBrowserTabInput): Promise<BrowserTab>;
+    createSiteTab(input: CreateSiteTabInput): Promise<BrowserTab>;
+    openInternalPage(input: OpenInternalPageInput): Promise<BrowserTab>;
+    listTabs(): Promise<{ activeTabId?: string; tabs: BrowserTab[] }>;
+    activateTab(tabId: string): Promise<void>;
+    closeTab(tabId: string): Promise<void>;
+    navigateTab(tabId: string, url: string): Promise<BrowserNavigationResult>;
+    navigate(url: string): Promise<BrowserNavigationResult>;
     back(): Promise<void>;
     forward(): Promise<void>;
     reload(): Promise<void>;
@@ -207,6 +350,12 @@ export interface AppApi {
     close(): Promise<void>;
     closeSession(siteId: string, sessionId: string): Promise<void>;
     debugState(): Promise<BrowserDebugState>;
+  };
+  overlays: {
+    openExtensionMenu(input: { anchor: BrowserRect }): Promise<void>;
+    openDownloadsBubble(input: { anchor: BrowserRect }): Promise<void>;
+    openAppMenu(input: { anchor: BrowserRect }): Promise<void>;
+    close(): Promise<void>;
   };
   extensions: {
     listGlobal(): Promise<SiteExtension[]>;
@@ -248,6 +397,14 @@ export interface AppApi {
     remove(downloadId: string): Promise<void>;
     clear(): Promise<void>;
   };
+  history: {
+    list(input?: HistoryListInput): Promise<HistoryRecord[]>;
+    clear(input?: HistoryClearInput): Promise<void>;
+  };
+  storage: {
+    stats(input?: StorageStatsInput): Promise<StoragePartitionStats[]>;
+    clearData(input: StorageClearDataInput): Promise<StorageClearDataResult>;
+  };
   settings: {
     get(): Promise<DownloadSettings>;
     update(input: Partial<DownloadSettings>): Promise<DownloadSettings>;
@@ -255,6 +412,7 @@ export interface AppApi {
   };
   windowChrome: WindowChromeInfo;
   onBrowserStateChanged(callback: (state: BrowserState) => void): () => void;
+  onBrowserTabsChanged(callback: (state: { activeTabId?: string; tabs: BrowserTab[] }) => void): () => void;
   onSiteMetadataUpdated(callback: (sites: Site[]) => void): () => void;
   onDownloadUpdated(callback: (download: DownloadState) => void): () => void;
   onExtensionUpdated(callback: (siteId: string, extensions: SiteExtension[]) => void): () => void;

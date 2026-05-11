@@ -8,8 +8,8 @@ export type JarvisMonitorEventName =
 
 export interface JarvisMonitorContext {
   viewKey: string;
-  siteId: string;
-  sessionId: string;
+  siteId?: string;
+  sessionId?: string;
   pageUrl: string;
 }
 

@@ -19,6 +19,10 @@ export class BuiltinTitleScript implements JarvisMonitorScript {
   }
 
   async handle(event: JarvisMonitorEvent<PageTitlePayload>) {
+    if (!event.context.siteId) {
+      return;
+    }
+
     const title = event.payload.title.trim();
     if (!title) {
       return;

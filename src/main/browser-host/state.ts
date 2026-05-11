@@ -1,6 +1,6 @@
 import type { WebContentsView } from "electron";
-import type { BrowserState } from "../../shared/types";
-import { isInternalErrorPageUrl } from "../error-page";
+import type { BrowserState, TabState } from "../../shared/types";
+import { isInternalErrorPageUrl } from "../internal-protocol";
 
 export const fallbackBrowserState: BrowserState = {
   url: "",
@@ -22,17 +22,25 @@ export function createBrowserState(input: CreateBrowserStateInput) {
   const webContents = input.view?.webContents;
   const history = webContents?.navigationHistory;
   const pageUrl = webContents?.getURL() ?? "";
-  const currentUrl = input.displayUrl || (isInternalErrorPageUrl(pageUrl) ? "" : pageUrl);
+  const currentUrl = input.displayUrl ?? input.patch.url ?? (isInternalErrorPageUrl(pageUrl) ? "" : pageUrl);
+  const title = input.patch.title ?? (input.statusCode ? `HTTP ${input.statusCode}` : webContents?.getTitle()) ?? "";
 
   return {
     ...fallbackBrowserState,
     ...input.previous,
     ...input.patch,
-    url: currentUrl || input.patch.url || "",
+    url: currentUrl,
     displayUrl: input.displayUrl,
-    title: input.displayUrl ? input.statusCode ? `HTTP ${input.statusCode}` : "网页无法打开" : webContents?.getTitle() ?? "",
+    title,
     canGoBack: Boolean(history?.canGoBack()),
     canGoForward: Boolean(history?.canGoForward()),
     isLoading: Boolean(webContents?.isLoading()),
   } satisfies BrowserState;
+}
+
+export function createTabState(input: CreateBrowserStateInput & { tabId: string }) {
+  return {
+    ...createBrowserState(input),
+    tabId: input.tabId,
+  } satisfies TabState;
 }

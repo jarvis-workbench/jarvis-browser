@@ -2,9 +2,9 @@ import { app } from "electron";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { DownloadSettings, DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
-import { createSiteFaviconAssetUrl } from "./asset-protocol";
 import { dataPaths } from "./data-paths";
 import { readExtensionManifestMetadata } from "./extension-manifest";
+import { createSiteFaviconInternalUrl } from "./internal-protocol";
 import { createJarvisScriptFromPath } from "./jarvis-script/manifest";
 
 type SiteIndexItem = Pick<Site, "id" | "title" | "name" | "url" | "faviconUrl" | "faviconPath" | "createdAt" | "updatedAt">;
@@ -300,7 +300,7 @@ export class MetadataStore {
     const site = this.requireSite(siteId);
     const extension = site.extensions.find((item) => item.id === extensionId);
     if (!extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     Object.assign(extension, input, { updatedAt: now() });
@@ -313,7 +313,7 @@ export class MetadataStore {
   async updateGlobalExtension(extensionId: string, input: Partial<SiteExtension>) {
     const extension = this.globalExtensions.find((item) => item.id === extensionId);
     if (!extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     Object.assign(extension, input, { updatedAt: now() });
@@ -325,7 +325,7 @@ export class MetadataStore {
     const site = this.requireSite(siteId);
     const nextExtensions = site.extensions.filter((extension) => extension.id !== extensionId);
     if (nextExtensions.length === site.extensions.length) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     site.extensions = nextExtensions;
@@ -341,7 +341,7 @@ export class MetadataStore {
   async deleteGlobalExtension(extensionId: string) {
     const nextExtensions = this.globalExtensions.filter((extension) => extension.id !== extensionId);
     if (nextExtensions.length === this.globalExtensions.length) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     this.globalExtensions = nextExtensions;
@@ -780,7 +780,7 @@ function toSiteIndexItem(site: Site): SiteIndexItem {
 function toRendererSite(site: Site) {
   const nextSite = structuredClone(site);
   if (nextSite.faviconPath) {
-    nextSite.faviconPath = createSiteFaviconAssetUrl(site.id);
+    nextSite.faviconPath = createSiteFaviconInternalUrl(site.id);
   }
 
   return nextSite;

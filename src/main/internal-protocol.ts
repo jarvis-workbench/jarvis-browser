@@ -1,0 +1,271 @@
+import { app, protocol, type Session } from "electron";
+import { readFile } from "node:fs/promises";
+import { extname, join } from "node:path";
+import type { BrowserInternalPageId } from "../shared/types";
+import { dataPaths } from "./data-paths";
+
+export const internalPageProtocol = "jarvis-browser";
+export const internalPageOrigin = `${internalPageProtocol}://`;
+
+export const newTabInternalPageId = "newtab";
+export const downloadsInternalPageId = "downloads";
+export const settingsInternalPageId = "settings";
+export const extensionsInternalPageId = "extensions";
+export const jarvisScriptInternalPageId = "jarvis-script";
+export const historyInternalPageId = "history";
+export const clearBrowsingDataInternalPageId = "clear-browsing-data";
+export const errorInternalPageId = "error";
+export const overlayInternalPageId = "overlay";
+export const assetsInternalPageId = "assets";
+
+export const internalPageIds = [
+  newTabInternalPageId,
+  downloadsInternalPageId,
+  settingsInternalPageId,
+  extensionsInternalPageId,
+  jarvisScriptInternalPageId,
+  historyInternalPageId,
+  clearBrowsingDataInternalPageId,
+] as const satisfies BrowserInternalPageId[];
+
+export type InternalPageId = typeof internalPageIds[number];
+
+const internalPageIdSet = new Set<string>(internalPageIds);
+
+export const internalPageUrls = {
+  [newTabInternalPageId]: createInternalPageUrl(newTabInternalPageId),
+  [downloadsInternalPageId]: createInternalPageUrl(downloadsInternalPageId),
+  [settingsInternalPageId]: createInternalPageUrl(settingsInternalPageId),
+  [extensionsInternalPageId]: createInternalPageUrl(extensionsInternalPageId),
+  [jarvisScriptInternalPageId]: createInternalPageUrl(jarvisScriptInternalPageId),
+  [historyInternalPageId]: createInternalPageUrl(historyInternalPageId),
+  [clearBrowsingDataInternalPageId]: createInternalPageUrl(clearBrowsingDataInternalPageId),
+} satisfies Record<InternalPageId, string>;
+
+export function createInternalPageUrl(pageId: InternalPageId) {
+  return `${internalPageOrigin}${pageId}`;
+}
+
+export function createInternalErrorPageUrl(info: { kind: "network" | "http"; url: string; errorText: string; statusCode?: number }) {
+  const params = new URLSearchParams({
+    kind: info.kind,
+    url: info.url,
+    errorText: info.errorText,
+  });
+  if (info.statusCode !== undefined) {
+    params.set("statusCode", String(info.statusCode));
+  }
+
+  return `${internalPageOrigin}${errorInternalPageId}?${params.toString()}`;
+}
+
+export function createSiteFaviconInternalUrl(siteId: string) {
+  return `${internalPageOrigin}${assetsInternalPageId}/site-favicon/${encodeURIComponent(siteId)}`;
+}
+
+export function isInternalPageId(value: string): value is InternalPageId {
+  return internalPageIdSet.has(value);
+}
+
+export function parseInternalPageUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== `${internalPageProtocol}:`) {
+      return undefined;
+    }
+
+    return isInternalPageId(parsed.hostname) ? parsed.hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function isInternalPageUrl(url: string) {
+  return parseInternalPageUrl(url) !== undefined;
+}
+
+export function isInternalErrorPageUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === `${internalPageProtocol}:` && parsed.hostname === errorInternalPageId;
+  } catch {
+    return false;
+  }
+}
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: internalPageProtocol,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
+const registeredSessions = new WeakSet<Session>();
+
+export function registerInternalProtocol() {
+  protocol.handle(internalPageProtocol, handleInternalRequest);
+}
+
+export function registerInternalProtocolForSession(targetSession: Session) {
+  if (registeredSessions.has(targetSession)) {
+    return;
+  }
+
+  targetSession.protocol.handle(internalPageProtocol, handleInternalRequest);
+  registeredSessions.add(targetSession);
+}
+
+async function handleInternalRequest(request: Request) {
+  const requestUrl = new URL(request.url);
+  if (requestUrl.hostname === assetsInternalPageId) {
+    return handleAssetRequest(requestUrl);
+  }
+
+  if (requestUrl.hostname === errorInternalPageId) {
+    return htmlResponse(await readErrorPageHtml());
+  }
+
+  if (requestUrl.hostname === overlayInternalPageId) {
+    return htmlResponse(await readOverlayPageHtml());
+  }
+
+  if (isInternalPageId(requestUrl.hostname)) {
+    if (isDevRendererAssetRequest(requestUrl)) {
+      return proxyDevRendererRequest(requestUrl);
+    }
+
+    return htmlResponse(await readRendererHtml(requestUrl.hostname));
+  }
+
+  return new Response("Not Found", { status: 404 });
+}
+
+async function handleAssetRequest(requestUrl: URL) {
+  const pathParts = requestUrl.pathname.split("/").filter(Boolean);
+  if (pathParts[0] !== "site-favicon" || !pathParts[1]) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const siteId = decodeURIComponent(pathParts[1]);
+  if (siteId.includes("/") || siteId.includes("\\")) {
+    return new Response("Bad Request", { status: 400 });
+  }
+
+  const metadata = await readFaviconMetadata(siteId);
+  if (!metadata?.faviconPath) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const faviconPath = metadata.faviconPath.replace(/^file:\/\//, "");
+  const bytes = await readFile(faviconPath).catch(() => undefined);
+  if (!bytes) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  return new Response(bytes, {
+    headers: {
+      "content-type": contentTypeFromPath(faviconPath),
+      "cache-control": "no-store",
+    },
+  });
+}
+
+async function readFaviconMetadata(siteId: string) {
+  try {
+    return JSON.parse(await readFile(dataPaths.sites.faviconMetadataFile(siteId), "utf8")) as { faviconPath?: string };
+  } catch {
+    return undefined;
+  }
+}
+
+async function readRendererHtml(pageId: InternalPageId) {
+  let html = await readFile(getRendererIndexPath(), "utf8");
+  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+    html = html.replace(
+      '<script type="module" src="/main.ts"></script>',
+      '<script type="module" src="/@vite/client"></script><script type="module" src="/main.ts"></script>',
+    );
+  }
+
+  return html.replace(
+    "</head>",
+    `<script>window.__JARVIS_INTERNAL_PAGE__=${JSON.stringify(pageId)}</script></head>`,
+  );
+}
+
+function isDevRendererAssetRequest(requestUrl: URL) {
+  return !app.isPackaged
+    && Boolean(process.env.VITE_DEV_SERVER_URL)
+    && requestUrl.pathname !== ""
+    && requestUrl.pathname !== "/";
+}
+
+async function proxyDevRendererRequest(requestUrl: URL) {
+  const devServerUrl = new URL(process.env.VITE_DEV_SERVER_URL ?? "");
+  const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, devServerUrl);
+  const upstream = await fetch(targetUrl);
+  const headers = new Headers(upstream.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  return new Response(await upstream.arrayBuffer(), {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+}
+
+function getRendererIndexPath() {
+  if (!app.isPackaged) {
+    return join(app.getAppPath(), "src", "renderer", "index.html");
+  }
+
+  return join(__dirname, "../renderer/index.html");
+}
+
+function readErrorPageHtml() {
+  if (!app.isPackaged) {
+    return readFile(join(app.getAppPath(), "src", "internal-pages", "error.html"), "utf8");
+  }
+
+  return readFile(join(process.resourcesPath, "internal-pages", "error.html"), "utf8");
+}
+
+function readOverlayPageHtml() {
+  if (!app.isPackaged) {
+    return readFile(join(app.getAppPath(), "src", "internal-pages", "overlay.html"), "utf8");
+  }
+
+  return readFile(join(process.resourcesPath, "internal-pages", "overlay.html"), "utf8");
+}
+
+function htmlResponse(html: string) {
+  return new Response(html, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+function contentTypeFromPath(filePath: string) {
+  const extension = extname(filePath).toLowerCase();
+  if (extension === ".png") {
+    return "image/png";
+  }
+  if (extension === ".jpg" || extension === ".jpeg") {
+    return "image/jpeg";
+  }
+  if (extension === ".svg") {
+    return "image/svg+xml";
+  }
+  if (extension === ".webp") {
+    return "image/webp";
+  }
+  return "image/x-icon";
+}

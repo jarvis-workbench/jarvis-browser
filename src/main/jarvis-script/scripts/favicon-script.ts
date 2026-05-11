@@ -37,7 +37,8 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   needsResponseBody(event: JarvisMonitorEvent<NetworkResponsePayload>) {
-    if (this.shouldSkipSite(event.context.siteId)) {
+    const siteId = event.context.siteId;
+    if (!siteId || this.shouldSkipSite(siteId)) {
       return false;
     }
 
@@ -58,7 +59,8 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
       return [];
     }
 
-    if (this.shouldSkipSite(event.context.siteId)) {
+    const siteId = event.context.siteId;
+    if (!siteId || this.shouldSkipSite(siteId)) {
       return [];
     }
 
@@ -97,7 +99,8 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   private async handlePageHtml(event: JarvisMonitorEvent<PageHtmlPayload>) {
-    if (this.shouldSkipSite(event.context.siteId)) {
+    const siteId = event.context.siteId;
+    if (!siteId || this.shouldSkipSite(siteId)) {
       this.clearView(event.context.viewKey);
       return;
     }
@@ -120,9 +123,9 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
       }
 
       if (/^data:/i.test(normalized)) {
-        const faviconPath = await cacheSiteFaviconDataUrl(event.context.siteId, normalized);
-        await this.options.store.updateSiteMetadata(event.context.siteId, { faviconUrl: normalized, faviconPath });
-        this.completeSite(event.context.siteId, event.context.viewKey);
+        const faviconPath = await cacheSiteFaviconDataUrl(siteId, normalized);
+        await this.options.store.updateSiteMetadata(siteId, { faviconUrl: normalized, faviconPath });
+        this.completeSite(siteId, event.context.viewKey);
         this.options.emitMetadataUpdate();
         return;
       }
@@ -132,7 +135,8 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
   }
 
   private async handleResponseBody(event: JarvisMonitorEvent<NetworkResponseBodyPayload>) {
-    if (this.shouldSkipSite(event.context.siteId)) {
+    const siteId = event.context.siteId;
+    if (!siteId || this.shouldSkipSite(siteId)) {
       this.clearView(event.context.viewKey);
       return;
     }
@@ -152,7 +156,7 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
     }
 
     const faviconPath = await cacheSiteFaviconBytes(
-      event.context.siteId,
+      siteId,
       event.payload.url,
       event.payload.bytes,
       event.payload.mimeType,
@@ -162,11 +166,11 @@ export class BuiltinFaviconScript implements JarvisMonitorScript {
     }
 
     this.cachedUrls.set(event.context.viewKey, event.payload.url);
-    await this.options.store.updateSiteMetadata(event.context.siteId, {
+    await this.options.store.updateSiteMetadata(siteId, {
       faviconUrl: event.payload.url,
       faviconPath,
     });
-    this.completeSite(event.context.siteId, event.context.viewKey);
+    this.completeSite(siteId, event.context.viewKey);
     this.options.emitMetadataUpdate();
   }
 

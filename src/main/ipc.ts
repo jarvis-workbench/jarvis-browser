@@ -1,12 +1,20 @@
 import { dialog, ipcMain } from "electron";
 import type { AppApi, BrowserRect, CookieRemoveDetails, CookieSetDetails } from "../shared/types";
 import { BrowserHost } from "./browser-host";
+import { parseBrowserOverlayAction } from "./browser-overlay-menu";
 import { getElectronSession } from "./electron-session-manager";
+import { HistoryManager } from "./history-manager";
+import { StorageManager } from "./storage-manager";
 import { MetadataStore } from "./store";
 
 const invoke = <T>(work: () => Promise<T> | T) => async () => work();
 
-export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
+export const registerIpc = (
+  store: MetadataStore,
+  browserHost: BrowserHost,
+  historyManager: HistoryManager,
+  storageManager: StorageManager,
+) => {
   ipcMain.handle("sites:list", invoke(() => store.listSites()));
   ipcMain.handle("sites:add", (_event, input: Parameters<AppApi["sites"]["add"]>[0]) =>
     store.addSite(input),
@@ -64,11 +72,24 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
   ipcMain.handle("browser:open", (_event, siteId: string, sessionId: string) =>
     browserHost.open(siteId, sessionId),
   );
+  ipcMain.handle("browser:create-tab", (_event, input: Parameters<AppApi["browser"]["createTab"]>[0]) =>
+    browserHost.createTab(input),
+  );
+  ipcMain.handle("browser:create-site-tab", (_event, input: Parameters<AppApi["browser"]["createSiteTab"]>[0]) =>
+    browserHost.createSiteTab(input),
+  );
+  ipcMain.handle("browser:open-internal-page", (_event, input: Parameters<AppApi["browser"]["openInternalPage"]>[0]) =>
+    browserHost.openInternalPage(input),
+  );
+  ipcMain.handle("browser:list-tabs", () => browserHost.listTabs());
+  ipcMain.handle("browser:activate-tab", (_event, tabId: string) => browserHost.activateTab(tabId));
+  ipcMain.handle("browser:close-tab", (_event, tabId: string) => browserHost.closeTab(tabId));
+  ipcMain.handle("browser:navigate-tab", (_event, tabId: string, url: string) => browserHost.navigateTab(tabId, url));
   ipcMain.handle("browser:navigate", (_event, url: string) => browserHost.navigate(url));
   ipcMain.handle("browser:back", () => browserHost.back());
   ipcMain.handle("browser:forward", () => browserHost.forward());
   ipcMain.handle("browser:reload", () => browserHost.reload());
-  ipcMain.handle("browser:reload-error-page", () => browserHost.reloadErrorPage());
+  ipcMain.handle("browser:reload-internal-error", () => browserHost.reloadErrorPage());
   ipcMain.handle("browser:stop", () => browserHost.stop());
   ipcMain.handle("browser:show-home", () => browserHost.showHome());
   ipcMain.handle("browser:hide-embedded-view", () => browserHost.hideEmbeddedView());
@@ -79,6 +100,23 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
     browserHost.closeSession(siteId, sessionId),
   );
   ipcMain.handle("browser:debug-state", () => browserHost.getDebugState());
+  ipcMain.handle("overlays:open-extension-menu", (_event, input: Parameters<AppApi["overlays"]["openExtensionMenu"]>[0]) =>
+    browserHost.openExtensionMenu(input),
+  );
+  ipcMain.handle("overlays:open-downloads-bubble", (_event, input: Parameters<AppApi["overlays"]["openDownloadsBubble"]>[0]) =>
+    browserHost.openDownloadsBubble(input),
+  );
+  ipcMain.handle("overlays:open-app-menu", (_event, input: Parameters<AppApi["overlays"]["openAppMenu"]>[0]) =>
+    browserHost.openAppMenu(input),
+  );
+  ipcMain.handle("overlays:action", (_event, input: { action: string; id: string; anchor?: BrowserRect }) =>
+    browserHost.handleOverlayAction({
+      action: parseBrowserOverlayAction(input.action),
+      id: input.id,
+      anchor: input.anchor,
+    }),
+  );
+  ipcMain.handle("overlays:close", () => browserHost.closeOverlay());
 
   ipcMain.handle("extensions:list-global", invoke(() => store.listGlobalExtensions()));
   ipcMain.handle("extensions:list-site", (_event, siteId: string) => {
@@ -158,6 +196,18 @@ export const registerIpc = (store: MetadataStore, browserHost: BrowserHost) => {
   ipcMain.handle("downloads:show-in-folder", (_event, downloadId: string) => browserHost.showDownloadInFolder(downloadId));
   ipcMain.handle("downloads:remove", (_event, downloadId: string) => store.removeDownload(downloadId));
   ipcMain.handle("downloads:clear", invoke(() => store.clearDownloads()));
+  ipcMain.handle("history:list", (_event, input: Parameters<AppApi["history"]["list"]>[0]) =>
+    historyManager.list(input),
+  );
+  ipcMain.handle("history:clear", (_event, input: Parameters<AppApi["history"]["clear"]>[0]) =>
+    historyManager.clear(input),
+  );
+  ipcMain.handle("storage:stats", (_event, input: Parameters<AppApi["storage"]["stats"]>[0]) =>
+    storageManager.stats(input),
+  );
+  ipcMain.handle("storage:clear-data", (_event, input: Parameters<AppApi["storage"]["clearData"]>[0]) =>
+    storageManager.clearData(input),
+  );
   ipcMain.handle("settings:get", invoke(() => store.getDownloadSettings()));
   ipcMain.handle("settings:update", (_event, input: Parameters<AppApi["settings"]["update"]>[0]) =>
     store.updateDownloadSettings(input),

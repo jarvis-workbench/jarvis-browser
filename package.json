@@ -13,7 +13,10 @@
     "build": "npm run build:main && npm run build:renderer",
     "build:main": "tsc -p tsconfig.electron.json",
     "build:renderer": "vite build",
-    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test:main": "node --test dist-test/test/**/*.test.js",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test": "npm run build:test && npm run test:main"
   },
   "dependencies": {
     "@icon-park/vue-next": "^1.4.2",

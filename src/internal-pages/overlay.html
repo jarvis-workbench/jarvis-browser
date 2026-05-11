@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: file: jarvis-browser: https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <title>工具浮层</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #fff;
+        color: #202124;
+        font: 13px -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+      }
+      .wrap {
+        display: grid;
+        gap: 6px;
+        min-height: 100vh;
+        border: 1px solid #e0e3e7;
+        border-radius: 8px;
+        padding: 8px;
+        overflow: hidden;
+      }
+      header { display: grid; gap: 2px; padding: 6px 8px 8px; }
+      header strong { font-size: 13px; }
+      header span,
+      small,
+      .empty { color: #5f6368; font-size: 12px; }
+      .list { display: grid; gap: 2px; overflow: auto; }
+      .item {
+        display: grid;
+        min-height: 38px;
+        grid-template-columns: 24px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        border: 0;
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: transparent;
+        color: #202124;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+      .item:hover { background: #f1f3f4; }
+      .item-disabled { color: #9aa0a6; cursor: default; }
+      .icon {
+        display: inline-flex;
+        width: 24px;
+        height: 24px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        border-radius: 50%;
+        background: #f1f3f4;
+        color: #5f6368;
+        font-weight: 700;
+      }
+      .icon img { width: 18px; height: 18px; object-fit: contain; }
+      .text { display: grid; min-width: 0; gap: 2px; }
+      .text strong,
+      .text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .empty { margin: 0; padding: 16px 8px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <main id="root" class="wrap"></main>
+    <script>
+      const root = document.getElementById("root");
+      let overlayAnchor;
+
+      function render(model) {
+        overlayAnchor = model.anchor;
+        const header = document.createElement("header");
+        const title = document.createElement("strong");
+        title.textContent = model.title || "";
+        header.append(title);
+        if (model.subtitle) {
+          const subtitle = document.createElement("span");
+          subtitle.textContent = model.subtitle;
+          header.append(subtitle);
+        }
+
+        const list = document.createElement("section");
+        list.className = "list";
+        const items = Array.isArray(model.items) ? model.items : [];
+        if (items.length) {
+          for (const item of items) {
+            list.append(renderItem(item));
+          }
+        } else {
+          const empty = document.createElement("p");
+          empty.className = "empty";
+          empty.textContent = model.emptyText || "暂无内容";
+          list.append(empty);
+        }
+
+        root.replaceChildren(header, list);
+      }
+
+      function renderItem(item) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `item${item.disabled ? " item-disabled" : ""}`;
+        button.disabled = Boolean(item.disabled);
+
+        const icon = document.createElement("span");
+        icon.className = "icon";
+        if (item.icon) {
+          const img = document.createElement("img");
+          img.src = item.icon;
+          img.alt = "";
+          icon.append(img);
+        } else {
+          icon.textContent = String(item.label || "").slice(0, 1);
+        }
+
+        const text = document.createElement("span");
+        text.className = "text";
+        const label = document.createElement("strong");
+        label.textContent = item.label || "";
+        text.append(label);
+        if (item.detail) {
+          const detail = document.createElement("small");
+          detail.textContent = item.detail;
+          text.append(detail);
+        }
+
+        button.append(icon, text);
+        button.addEventListener("click", () => {
+          window.jarvisOverlay.action({ action: item.action, id: item.id, anchor: overlayAnchor }).catch(() => undefined);
+        });
+        return button;
+      }
+
+      window.jarvisOverlay.onData(render);
+    </script>
+  </body>
+</html>

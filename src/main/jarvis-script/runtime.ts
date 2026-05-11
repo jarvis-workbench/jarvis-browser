@@ -84,10 +84,10 @@ export class JarvisScriptRuntime {
     return [...responses.values()];
   }
 
-  async getContentScripts(siteId: string, pageUrl: string) {
+  async getContentScripts(siteId: string | undefined, pageUrl: string) {
     const scripts = [
       ...this.options.store.listGlobalJarvisScripts(),
-      ...this.options.store.listSiteJarvisScripts(siteId),
+      ...(siteId ? this.options.store.listSiteJarvisScripts(siteId) : []),
     ].filter((script) => script.runtimeState.enabled);
     const assets: JarvisContentScriptAsset[] = [];
 
@@ -158,10 +158,10 @@ export class JarvisScriptRuntime {
     this.workerScripts.clear();
   }
 
-  private getEnabledMonitorScripts(siteId: string) {
+  private getEnabledMonitorScripts(siteId?: string) {
     const userScripts = [
       ...this.options.store.listGlobalJarvisScripts(),
-      ...this.options.store.listSiteJarvisScripts(siteId),
+      ...(siteId ? this.options.store.listSiteJarvisScripts(siteId) : []),
     ]
       .filter((script) => script.runtimeState.enabled)
       .map((script) => new UserJarvisMonitorScript(script, this.markScriptError, (targetScript, event) => {
@@ -341,10 +341,12 @@ export class JarvisScriptRuntime {
     if (message.method === "site:update-favicon") {
       this.assertPermission(script, "site:favicon");
       const siteId = this.resolveTargetSiteId(script, message.payload);
-      return this.options.store.updateSiteMetadata(siteId, {
+      const site = await this.options.store.updateSiteMetadata(siteId, {
         faviconUrl: typeof message.payload?.faviconUrl === "string" ? message.payload.faviconUrl : undefined,
         faviconPath: typeof message.payload?.faviconPath === "string" ? message.payload.faviconPath : undefined,
       });
+      this.options.emitMetadataUpdate();
+      return site;
     }
 
     if (message.method === "renderer:message") {
@@ -361,8 +363,8 @@ export class JarvisScriptRuntime {
       return undefined;
     }
 
-    if (message.method === "chrome-plugin:message") {
-      this.assertPermission(script, "chrome-plugin:message");
+    if (message.method === "browser-tab:message") {
+      this.assertPermission(script, "browser-tab:message");
       await this.options.sendMessageToWebContents({
         siteId: typeof message.payload?.siteId === "string" ? message.payload.siteId : script.siteId,
         sessionId: typeof message.payload?.sessionId === "string" ? message.payload.sessionId : undefined,

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, BrowserRect, BrowserState, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, JarvisScript, JarvisScriptMessage, Site, SiteExtension, WindowChromeInfo } from "../shared/types";
+import type { AppApi, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -38,7 +38,14 @@ const appApi: AppApi = {
   },
   browser: {
     open: (siteId, sessionId) => invoke("browser:open", siteId, sessionId),
-    navigate: (url) => invoke("browser:navigate", url),
+    createTab: (input) => invoke("browser:create-tab", input),
+    createSiteTab: (input) => invoke("browser:create-site-tab", input),
+    openInternalPage: (input) => invoke("browser:open-internal-page", input),
+    listTabs: () => invoke("browser:list-tabs"),
+    activateTab: (tabId) => invoke("browser:activate-tab", tabId),
+    closeTab: (tabId) => invoke("browser:close-tab", tabId),
+    navigateTab: (tabId, url) => invoke<BrowserNavigationResult>("browser:navigate-tab", tabId, url),
+    navigate: (url) => invoke<BrowserNavigationResult>("browser:navigate", url),
     back: () => invoke("browser:back"),
     forward: () => invoke("browser:forward"),
     reload: () => invoke("browser:reload"),
@@ -50,6 +57,12 @@ const appApi: AppApi = {
     close: () => invoke("browser:close"),
     closeSession: (siteId, sessionId) => invoke("browser:close-session", siteId, sessionId),
     debugState: () => invoke("browser:debug-state"),
+  },
+  overlays: {
+    openExtensionMenu: (input) => invoke("overlays:open-extension-menu", input),
+    openDownloadsBubble: (input) => invoke("overlays:open-downloads-bubble", input),
+    openAppMenu: (input) => invoke("overlays:open-app-menu", input),
+    close: () => invoke("overlays:close"),
   },
   extensions: {
     listGlobal: () => invoke<SiteExtension[]>("extensions:list-global"),
@@ -91,6 +104,14 @@ const appApi: AppApi = {
     remove: (downloadId) => invoke("downloads:remove", downloadId),
     clear: () => invoke("downloads:clear"),
   },
+  history: {
+    list: (input) => invoke<HistoryRecord[]>("history:list", input),
+    clear: (input) => invoke("history:clear", input),
+  },
+  storage: {
+    stats: (input) => invoke<StoragePartitionStats[]>("storage:stats", input),
+    clearData: (input) => invoke<StorageClearDataResult>("storage:clear-data", input),
+  },
   settings: {
     get: () => invoke<DownloadSettings>("settings:get"),
     update: (input) => invoke("settings:update", input),
@@ -98,6 +119,7 @@ const appApi: AppApi = {
   },
   windowChrome,
   onBrowserStateChanged: (callback) => on<[BrowserState]>("browser:state-changed", callback),
+  onBrowserTabsChanged: (callback) => on<[{ activeTabId?: string; tabs: BrowserTab[] }]>("browser:tabs-changed", callback),
   onSiteMetadataUpdated: (callback) => on<[Site[]]>("site:metadata-updated", callback),
   onDownloadUpdated: (callback) => on<[DownloadState]>("download:updated", callback),
   onExtensionUpdated: (callback) => on<[string, SiteExtension[]]>("extension:updated", callback),

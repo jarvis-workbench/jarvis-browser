@@ -32,7 +32,7 @@ export function useBrowserExtensions(options: BrowserExtensionsOptions) {
     }
 
     globalExtensions.value = upsertExtension(globalExtensions.value, extension);
-    options.setStatusMessage(`${extension.name} 已安装为全局插件`);
+    options.setStatusMessage(`${extension.name} 已安装为全局扩展程序`);
   }
 
   async function installSiteExtension() {

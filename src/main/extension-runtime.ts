@@ -1,6 +1,6 @@
 import { BrowserWindow, OpenDialogOptions, dialog } from "electron";
 import type { Site, SiteExtension } from "../shared/types";
-import { getElectronSession } from "./electron-session-manager";
+import { getDefaultProfileSession, getElectronSession } from "./electron-session-manager";
 import { createExtensionFromPath } from "./extension-manifest";
 import type { MetadataStore } from "./store";
 
@@ -23,6 +23,14 @@ export class ExtensionRuntime {
     for (const extension of site.extensions) {
       if (extension.enabled) {
         await this.loadForSite(site, extension);
+      }
+    }
+  }
+
+  async loadEnabledForDefaultProfile() {
+    for (const extension of this.store.listGlobalExtensions()) {
+      if (extension.enabled) {
+        await this.loadForDefaultProfile(extension);
       }
     }
   }
@@ -63,7 +71,7 @@ export class ExtensionRuntime {
     }
 
     if (site.sessions.length === 0) {
-      throw new Error("请先创建站点会话再安装插件");
+      throw new Error("请先创建站点会话再安装扩展程序");
     }
 
     const extension = await this.store.installSiteExtensionSource(
@@ -86,7 +94,7 @@ export class ExtensionRuntime {
   async enableGlobal(extensionId: string) {
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     let loadError: string | undefined;
@@ -105,7 +113,7 @@ export class ExtensionRuntime {
   async disableGlobal(extensionId: string) {
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     await this.removeFromAllSites(extensionId);
@@ -115,7 +123,7 @@ export class ExtensionRuntime {
   async uninstallGlobal(extensionId: string) {
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     await this.removeFromAllSites(extensionId);
@@ -126,7 +134,7 @@ export class ExtensionRuntime {
     const site = this.store.getSite(siteId);
     const extension = site?.extensions.find((item) => item.id === extensionId);
     if (!site || !extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     let loadError: string | undefined;
@@ -146,7 +154,7 @@ export class ExtensionRuntime {
     const site = this.store.getSite(siteId);
     const extension = site?.extensions.find((item) => item.id === extensionId);
     if (!site || !extension) {
-      throw new Error("插件不存在");
+      throw new Error("扩展程序不存在");
     }
 
     await this.removeFromSite(site, extensionId);
@@ -172,10 +180,16 @@ export class ExtensionRuntime {
     }
 
     if (!loaded) {
-      throw new Error("当前站点没有可加载插件的会话");
+      throw new Error("当前站点没有可加载扩展程序的会话");
     }
 
     return loaded;
+  }
+
+  private async loadForDefaultProfile(extension: SiteExtension) {
+    const electronSession = getDefaultProfileSession();
+    this.bindSessionDownloads("default-profile", electronSession);
+    return electronSession.loadExtension(extension.path, { allowFileAccess: true });
   }
 
   private async loadForAllSites(extension: SiteExtension) {
@@ -193,7 +207,7 @@ export class ExtensionRuntime {
         const electronSession = getElectronSession(site.id, siteSession.id);
         electronSession.removeExtension(extensionId);
       } catch {
-        // 插件不一定已加载到每个 session。
+        // 扩展程序不一定已加载到每个 session。
       }
     }
   }
@@ -206,7 +220,7 @@ export class ExtensionRuntime {
 
   private async pickExtensionPath() {
     const options: OpenDialogOptions = {
-      title: "选择已解压的插件目录",
+      title: "选择已解压的扩展程序目录",
       properties: ["openDirectory"],
     };
     const result = await dialog.showOpenDialog(this.window, options);

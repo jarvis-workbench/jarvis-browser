@@ -1,10 +1,12 @@
 import { app, BrowserWindow, nativeImage } from "electron";
 import { join } from "node:path";
-import { registerAssetProtocol } from "./asset-protocol";
 import { BrowserHost } from "./browser-host";
 import { configureElectronDataPaths } from "./data-paths";
-import { registerErrorPageProtocol } from "./error-page";
+import { createDefaultProfilePartition, createSessionPartition } from "./electron-session-manager";
+import { HistoryManager } from "./history-manager";
+import { registerInternalProtocol } from "./internal-protocol";
 import { registerIpc } from "./ipc";
+import { StorageManager } from "./storage-manager";
 import { MetadataStore } from "./store";
 
 const isDev = !app.isPackaged;
@@ -33,8 +35,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
-    registerAssetProtocol();
-    registerErrorPageProtocol();
+    registerInternalProtocol();
     if (!appIcon.isEmpty()) {
       app.dock?.setIcon(appIcon);
     }
@@ -51,6 +52,16 @@ if (!hasSingleInstanceLock) {
 const createWindow = async () => {
   const store = new MetadataStore();
   await store.load();
+  const historyManager = new HistoryManager();
+  await historyManager.load();
+  const storageManager = new StorageManager(historyManager, () =>
+    [
+      createDefaultProfilePartition(),
+      ...store.listSites().flatMap((site) =>
+        site.sessions.map((siteSession) => createSessionPartition(site.id, siteSession.id)),
+      ),
+    ],
+  );
 
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -75,15 +86,14 @@ const createWindow = async () => {
     },
   });
 
-  const browserHost = new BrowserHost(mainWindow, store);
+  const browserHost = new BrowserHost(mainWindow, store, historyManager);
   browserHost.bindDefaultDownloads();
-  registerIpc(store, browserHost);
+  registerIpc(store, browserHost, historyManager, storageManager);
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (browserHost.handleBrowserShortcut(input)) {
       event.preventDefault();
     }
   });
-
   mainWindow.on("close", (event) => {
     if (isClosingMainWindow) {
       return;

@@ -1,10 +1,55 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue';
-import { RouterView } from 'vue-router';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { RouterView, useRoute } from 'vue-router';
+import ExtensionManager from './components/ExtensionManager.vue';
+import JarvisScriptManager from './components/JarvisScriptManager.vue';
 import { useBrowserStore } from './stores/browser';
+import ClearBrowsingDataView from './views/ClearBrowsingDataView.vue';
+import DownloadsView from './views/DownloadsView.vue';
+import HistoryView from './views/HistoryView.vue';
+import SettingsView from './views/SettingsView.vue';
+import SitesView from './views/SitesView.vue';
 
 const browser = useBrowserStore();
+const route = useRoute();
 let unbindEvents: (() => void) | undefined;
+
+const injectedInternalPage = (
+  window as Window & { __JARVIS_INTERNAL_PAGE__?: string }
+).__JARVIS_INTERNAL_PAGE__;
+
+const internalPageComponent = computed(() => {
+  const pageId = injectedInternalPage || route.name;
+  if (pageId === 'newtab') {
+    return SitesView;
+  }
+
+  if (pageId === 'downloads') {
+    return DownloadsView;
+  }
+
+  if (pageId === 'settings') {
+    return SettingsView;
+  }
+
+  if (pageId === 'extensions') {
+    return ExtensionManager;
+  }
+
+  if (pageId === 'jarvis-script') {
+    return JarvisScriptManager;
+  }
+
+  if (pageId === 'history') {
+    return HistoryView;
+  }
+
+  if (pageId === 'clear-browsing-data') {
+    return ClearBrowsingDataView;
+  }
+
+  return undefined;
+});
 
 function applyWindowChromeVariables() {
   const chrome = window.appApi.windowChrome;
@@ -31,5 +76,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <RouterView />
+  <component :is="internalPageComponent" v-if="internalPageComponent" />
+  <RouterView v-else />
 </template>

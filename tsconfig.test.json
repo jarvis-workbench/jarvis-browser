@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.electron.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "rootDir": "src",
+    "noEmit": false
+  },
+  "include": [
+    "src/main/**/*.ts",
+    "src/shared/**/*.ts",
+    "src/test/**/*.ts"
+  ]
+}

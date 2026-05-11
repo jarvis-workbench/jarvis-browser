@@ -3,11 +3,13 @@ import {
   AddOne,
   Close,
   Code,
+  Delete,
   Download,
   Home,
   Left,
   Loading,
-  Plug,
+  More,
+  Puzzle,
   Refresh,
   Right,
   Setting,
@@ -19,50 +21,107 @@ import {
   ElMessage,
 } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { BrowserRect, Site, SiteExtension, SiteSession } from '../../shared/types';
+import type { BrowserRect, BrowserTab, Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
-import ExtensionManager from '../components/ExtensionManager.vue';
-import JarvisScriptManager from '../components/JarvisScriptManager.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
-import { downloadsTabId, internalPageUrls, settingsTabId, type InternalPageTabId } from '../stores/browser-tabs';
+import {
+  clearBrowsingDataTabId,
+  downloadsTabId,
+  extensionsTabId,
+  historyTabId,
+  jarvisScriptTabId,
+  settingsTabId,
+  type InternalPageTabId,
+} from '../stores/browser-tabs';
 import { useBrowserStore } from '../stores/browser';
-import DownloadsView from './DownloadsView.vue';
-import SettingsView from './SettingsView.vue';
-import SitesView from './SitesView.vue';
+
+type DirectTopLevelTab = {
+  type: 'direct';
+  key: string;
+  tab: BrowserTab;
+};
+
+type SiteTopLevelTab = {
+  type: 'site';
+  key: string;
+  site: Site;
+  tabs: BrowserTab[];
+  activeSessionTab: BrowserTab;
+};
+
+type TopLevelTab = DirectTopLevelTab | SiteTopLevelTab;
 
 const browser = useBrowserStore();
 const browserHost = ref<HTMLElement | null>(null);
-type ActivePanel = 'tabPicker' | 'sessionDrawer' | 'extensionManager' | 'scriptManager' | 'sessionCreator' | null;
+type ActivePanel = 'tabPicker' | 'sessionDrawer' | 'sessionCreator' | null;
 const activePanel = ref<ActivePanel>(null);
 const sessionDrawerVisible = ref(false);
 const tabPickerVisible = ref(false);
-const extensionManagerVisible = ref(false);
-const scriptManagerVisible = ref(false);
 const creatingSession = ref(false);
 const creatingSessionSubmitting = ref(false);
 const newSessionName = ref('');
 const creatingSessionSite = ref<Site | null>(null);
+const lastActiveSessionTabBySiteId = ref<Record<string, string>>({});
 
 let resizeObserver: ResizeObserver | undefined;
 
 const selectedUrl = computed(() => browser.browserState.displayUrl || browser.browserState.url || browser.selectedSite?.url || '');
 const displayedAddress = computed(() => {
-  if (isDownloadsActive.value) {
-    return internalPageUrls[downloadsTabId];
-  }
-
-  if (isSettingsActive.value) {
-    return internalPageUrls[settingsTabId];
+  if (activeTab.value?.kind === 'internal') {
+    return activeTab.value.url;
   }
 
   return browser.address;
 });
-const selectedSessionName = computed(() => browser.selectedSession?.name ?? '');
-const isHomeActive = computed(() => browser.activeTabId === browser.homeTabId);
-const isDownloadsActive = computed(() => browser.activeTabId === browser.downloadsTabId);
-const isSettingsActive = computed(() => browser.activeTabId === browser.settingsTabId);
-const isInternalPageActive = computed(() => isHomeActive.value || isDownloadsActive.value || isSettingsActive.value);
-const showSessionName = computed(() => !isInternalPageActive.value && Boolean(selectedSessionName.value));
+const activeTab = computed(() => browser.openTabs.find((tab) => tab.id === browser.activeTabId) ?? null);
+const isHomeActive = computed(() => activeTab.value?.internalPageId === browser.homeTabId);
+const isDownloadsActive = computed(() => activeTab.value?.internalPageId === browser.downloadsTabId);
+const isSettingsActive = computed(() => activeTab.value?.internalPageId === browser.settingsTabId);
+const isInternalPageActive = computed(() => activeTab.value?.kind === 'internal');
+const currentSessionName = computed(() => (
+  activeTab.value?.kind === 'site' ? browser.selectedSession?.name ?? '' : ''
+));
+const activeSiteSessionTabs = computed(() => {
+  const siteId = activeTab.value?.siteId;
+  return siteId ? browser.openSessionTabs.filter((tab) => tab.siteId === siteId) : [];
+});
+const topLevelTabs = computed<TopLevelTab[]>(() => {
+  const topTabs: TopLevelTab[] = [];
+  const siteGroups = new Map<string, SiteTopLevelTab>();
+
+  for (const tab of browser.openTabs) {
+    if (tab.kind !== 'site' || !tab.siteId) {
+      topTabs.push({
+        type: 'direct',
+        key: tab.id,
+        tab,
+      });
+      continue;
+    }
+
+    const site = browser.sites.find((item) => item.id === tab.siteId);
+    if (!site) {
+      continue;
+    }
+
+    let siteTab = siteGroups.get(site.id);
+    if (!siteTab) {
+      siteTab = {
+        type: 'site',
+        key: `site:${site.id}`,
+        site,
+        tabs: [],
+        activeSessionTab: tab,
+      };
+      siteGroups.set(site.id, siteTab);
+      topTabs.push(siteTab);
+    }
+    siteTab.tabs.push(tab);
+    siteTab.activeSessionTab = resolveActiveSessionTab(site.id, siteTab.tabs);
+  }
+
+  return topTabs;
+});
 const browserInsetLeft = computed(() => 0);
 const browserInsetRight = computed(() => {
   if (isInternalPageActive.value) {
@@ -72,8 +131,6 @@ const browserInsetRight = computed(() => {
   return Math.max(
     sessionDrawerVisible.value || tabPickerVisible.value ? 360 : 0,
     creatingSession.value ? 320 : 0,
-    extensionManagerVisible.value ? 420 : 0,
-    scriptManagerVisible.value ? 420 : 0,
   );
 });
 const creatingSessionTitle = computed(() => (
@@ -94,12 +151,11 @@ const downloadProgress = computed(() => {
 async function setActivePanel(panel: ActivePanel) {
   if (panel) {
     await browser.closeExtensionPopup();
+    await window.appApi.overlays.close();
   }
   activePanel.value = panel;
   tabPickerVisible.value = panel === 'tabPicker';
   sessionDrawerVisible.value = panel === 'sessionDrawer';
-  extensionManagerVisible.value = panel === 'extensionManager';
-  scriptManagerVisible.value = panel === 'scriptManager';
   creatingSession.value = panel === 'sessionCreator';
   await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
@@ -115,12 +171,12 @@ async function syncPanelVisibility(panel: Exclude<ActivePanel, null>, visible: b
 }
 
 async function ensureSiteOpen() {
-  const initialTabId = browser.activeTabId;
   if (!browser.sites.length) {
     await browser.loadSites();
   }
 
-  if (initialTabId === browser.homeTabId && browser.activeTabId === browser.homeTabId) {
+  await browser.syncTabs();
+  if (!browser.activeTabId) {
     await browser.activateHome();
   }
 
@@ -152,30 +208,61 @@ async function addSession() {
   }
 }
 
-function isSessionLoading(session: SiteSession) {
-  return Boolean(browser.getTabState(session.id)?.isLoading);
+function isTabLoading(tabId: string) {
+  return Boolean(browser.tabStates[tabId]?.isLoading);
 }
 
-async function openSession(site: Site, session: SiteSession) {
-  try {
-    await browser.activateOpenTab({ site, session });
-    await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
-  } catch (error) {
-    ElMessage.error(formatError(error));
-  }
+function isTopLevelTabLoading(tab: TopLevelTab) {
+  return tab.type === 'site' ? isTabLoading(tab.activeSessionTab.id) : isTabLoading(tab.tab.id);
 }
 
-async function activateInternalTab(tabId: InternalPageTabId) {
-  await browser.activateInternalPage(tabId);
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+function tabTitle(tab: { id: string; title: string; url: string }) {
+  return browser.tabStates[tab.id]?.title || tab.title || tab.url;
 }
 
-async function refreshScriptManager(siteId: string | null) {
-  if (!scriptManagerVisible.value || !siteId) {
-    return;
+function sessionTabTitle(tab: BrowserTab & { session: SiteSession }) {
+  const stateTitle = browser.tabStates[tab.id]?.title?.trim();
+  if (stateTitle && stateTitle !== tab.session.name) {
+    return stateTitle;
   }
 
-  await browser.loadScripts(siteId);
+  return tab.url;
+}
+
+function topLevelTabTitle(tab: TopLevelTab) {
+  return tab.type === 'site' ? browser.siteDisplayTitle(tab.site) : tabTitle(tab.tab);
+}
+
+function topLevelTabInitial(tab: TopLevelTab) {
+  return topLevelTabTitle(tab).trim().slice(0, 1).toUpperCase();
+}
+
+function topLevelTabFavicon(tab: TopLevelTab) {
+  if (tab.type === 'site') {
+    return browser.siteIconSrc(tab.site) || tabFaviconSrc(tab.activeSessionTab);
+  }
+
+  return tabFaviconSrc(tab.tab);
+}
+
+function tabFaviconSrc(tab: BrowserTab) {
+  return toImageSrc(tab.favicon);
+}
+
+function isTopLevelTabActive(tab: TopLevelTab) {
+  return tab.type === 'site'
+    ? activeTab.value?.siteId === tab.site.id
+    : browser.activeTabId === tab.tab.id;
+}
+
+function resolveActiveSessionTab(siteId: string, tabs: BrowserTab[]) {
+  const currentActive = activeTab.value?.siteId === siteId
+    ? tabs.find((tab) => tab.id === activeTab.value?.id)
+    : undefined;
+  return currentActive
+    || tabs.find((tab) => tab.id === lastActiveSessionTabBySiteId.value[siteId])
+    || tabs.at(-1)
+    || tabs[0];
 }
 
 async function openSessionFromDrawer(session: SiteSession) {
@@ -199,10 +286,6 @@ async function openSessionFromPicker(site: Site, session: SiteSession) {
 }
 
 async function navigate() {
-  if (isInternalPageActive.value) {
-    return;
-  }
-
   try {
     await browser.navigate();
   } catch (error) {
@@ -218,29 +301,40 @@ async function browserAction(action: 'back' | 'forward' | 'reload' | 'stop') {
   }
 }
 
-async function openExtensionPopup(extension: SiteExtension, event: MouseEvent) {
+async function openExtensionMenuOverlay(event: MouseEvent) {
+  await window.appApi.overlays.openExtensionMenu({ anchor: elementAnchor(event.currentTarget) });
+}
+
+async function openDownloadsBubbleOverlay(event: MouseEvent) {
   try {
-    await browser.openExtensionPopup(extension, elementAnchor(event.currentTarget));
+    const anchor = elementAnchor(event.currentTarget);
+    await browser.loadDownloads();
+    await window.appApi.overlays.openDownloadsBubble({ anchor });
   } catch (error) {
     ElMessage.error(formatError(error));
   }
 }
 
-function extensionActionIcon(extension: SiteExtension) {
-  return toImageSrc(extension.action?.icon || extension.icon);
-}
-
-function extensionActionTitle(extension: SiteExtension) {
-  return extension.action?.defaultTitle || extension.name;
+async function openAppMenuOverlay(event: MouseEvent) {
+  await window.appApi.overlays.openAppMenu({ anchor: elementAnchor(event.currentTarget) });
 }
 
 function elementAnchor(target: EventTarget | null): BrowserRect {
   const element = target as HTMLElement | null;
   if (!element) {
-    return { x: 0, y: 0, width: 0, height: 0 };
+    throw new Error('浮层锚点不存在');
   }
 
   const rect = element.getBoundingClientRect();
+  if (!Number.isFinite(rect.left)
+    || !Number.isFinite(rect.top)
+    || !Number.isFinite(rect.width)
+    || !Number.isFinite(rect.height)
+    || rect.width <= 0
+    || rect.height <= 0) {
+    throw new Error('浮层锚点无效');
+  }
+
   return {
     x: Math.round(rect.left),
     y: Math.round(rect.top),
@@ -254,7 +348,7 @@ function toImageSrc(value?: string) {
     return '';
   }
 
-  if (/^(https?:|file:|data:|jarvis-asset:)/i.test(value)) {
+  if (/^(https?:|file:|data:|jarvis-browser:)/i.test(value)) {
     return value;
   }
 
@@ -265,48 +359,35 @@ function toImageSrc(value?: string) {
   return value;
 }
 
-async function closeSessionTab(site: Site, session: SiteSession) {
-  try {
-    await browser.closeSessionTab(site, session);
-    await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
-  } catch (error) {
-    ElMessage.error(formatError(error));
-  }
-}
-
-async function closeInternalTab(tabId: InternalPageTabId) {
-  await browser.closeInternalPage(tabId);
+async function activateBrowserTab(tabId: string) {
+  await browser.activateOpenTab(browser.openTabs.find((tab) => tab.id === tabId)!);
   await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
-async function goHome() {
-  await setActivePanel(null);
-  await browser.activateHome();
+async function activateTopLevelTab(tab: TopLevelTab) {
+  await activateBrowserTab(tab.type === 'site' ? tab.activeSessionTab.id : tab.tab.id);
 }
 
-async function openDownloads() {
-  await setActivePanel(null);
-  await browser.activateInternalPage(downloadsTabId);
+async function closeBrowserTab(tabId: string) {
+  await window.appApi.browser.closeTab(tabId);
+  delete browser.tabStates[tabId];
+  await browser.syncTabs();
+  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
-async function openSettings() {
-  await setActivePanel(null);
-  await browser.activateInternalPage(settingsTabId);
-}
-
-async function openExtensionManager() {
-  await togglePanel('extensionManager');
-}
-
-async function openScriptManager() {
-  try {
-    if (activePanel.value !== 'scriptManager' && browser.selectedSite) {
-      await browser.loadScripts(browser.selectedSite.id);
-    }
-    await togglePanel('scriptManager');
-  } catch (error) {
-    ElMessage.error(formatError(error));
+async function closeTopLevelTab(tab: TopLevelTab) {
+  if (tab.type === 'direct') {
+    await closeBrowserTab(tab.tab.id);
+    return;
   }
+
+  for (const sessionTab of tab.tabs) {
+    await window.appApi.browser.closeTab(sessionTab.id);
+    delete browser.tabStates[sessionTab.id];
+  }
+  delete lastActiveSessionTabBySiteId.value[tab.site.id];
+  await browser.syncTabs();
+  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function openCurrentSessionCreator(site?: Site) {
@@ -350,36 +431,22 @@ watch(
 );
 
 watch(
+  () => browser.activeTabId,
+  () => {
+    if (activeTab.value?.siteId) {
+      lastActiveSessionTabBySiteId.value = {
+        ...lastActiveSessionTabBySiteId.value,
+        [activeTab.value.siteId]: activeTab.value.id,
+      };
+    }
+  },
+  { immediate: true },
+);
+
+watch(
   () => [browserInsetLeft.value, browserInsetRight.value],
   async ([insetLeft, insetRight]) => {
     await browser.refreshBounds(browserHost.value, insetLeft, insetRight);
-  },
-);
-
-watch(
-  () => extensionManagerVisible.value,
-  async (visible) => {
-    if (!visible) {
-      await browser.refreshBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
-    }
-  },
-);
-
-watch(
-  () => scriptManagerVisible.value,
-  async (visible) => {
-    if (!visible) {
-      await browser.refreshBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
-    } else if (browser.selectedSiteId) {
-      await refreshScriptManager(browser.selectedSiteId);
-    }
-  },
-);
-
-watch(
-  () => browser.selectedSiteId,
-  async (siteId) => {
-    await refreshScriptManager(siteId);
   },
 );
 
@@ -387,55 +454,40 @@ watch(
 
 <template>
   <main class="chrome-shell">
-    <section class="chrome-top">
+    <section class="chrome-top" :class="{ 'chrome-top--with-session-tabs': activeSiteSessionTabs.length }">
       <div class="chrome-tabs" aria-label="标签栏">
         <button
-          class="chrome-tab chrome-tab--home"
-          :class="{ 'chrome-tab--active': isHomeActive }"
-          type="button"
-          @click="goHome"
-        >
-          <Home theme="outline" size="14" />
-          <span class="chrome-tab__title">起始页</span>
-        </button>
-
-        <button
-          v-for="tab in browser.openSessionTabs"
-          :key="tab.id"
+          v-for="tab in topLevelTabs"
+          :key="tab.key"
           class="chrome-tab"
           :class="{
-            'chrome-tab--active': tab.id === browser.activeTabId,
-            'chrome-tab--loading': isSessionLoading(tab.session),
+            'chrome-tab--active': isTopLevelTabActive(tab),
+            'chrome-tab--loading': isTopLevelTabLoading(tab),
+            'chrome-tab--internal': tab.type === 'direct' && tab.tab.kind === 'internal',
+            'chrome-tab--site-container': tab.type === 'site',
           }"
           type="button"
-          @click="openSession(tab.site, tab.session)"
+          @click="activateTopLevelTab(tab)"
         >
           <Loading
-            v-if="isSessionLoading(tab.session)"
+            v-if="isTopLevelTabLoading(tab)"
             class="chrome-tab__loading"
             theme="outline"
             size="14"
           />
           <span v-else class="chrome-tab__icon">
-            <img v-if="browser.siteIconSrc(tab.site)" :src="browser.siteIconSrc(tab.site)" alt="" />
-            <span v-else>{{ browser.siteInitial(tab.site) }}</span>
+            <Home v-if="tab.type === 'direct' && tab.tab.internalPageId === browser.homeTabId" theme="outline" size="14" />
+            <Download v-else-if="tab.type === 'direct' && tab.tab.internalPageId === downloadsTabId" theme="outline" size="14" />
+            <Setting v-else-if="tab.type === 'direct' && tab.tab.internalPageId === settingsTabId" theme="outline" size="14" />
+            <Puzzle v-else-if="tab.type === 'direct' && tab.tab.internalPageId === extensionsTabId" theme="outline" size="14" />
+            <Code v-else-if="tab.type === 'direct' && tab.tab.internalPageId === jarvisScriptTabId" theme="outline" size="14" />
+            <Time v-else-if="tab.type === 'direct' && tab.tab.internalPageId === historyTabId" theme="outline" size="14" />
+            <Delete v-else-if="tab.type === 'direct' && tab.tab.internalPageId === clearBrowsingDataTabId" theme="outline" size="14" />
+            <img v-else-if="topLevelTabFavicon(tab)" :src="topLevelTabFavicon(tab)" alt="" />
+            <span v-else>{{ topLevelTabInitial(tab) }}</span>
           </span>
-          <span class="chrome-tab__title">{{ browser.tabDisplayTitle(tab.session) }}</span>
-          <Close class="chrome-tab__close" theme="outline" size="13" @click.stop="closeSessionTab(tab.site, tab.session)" />
-        </button>
-
-        <button
-          v-for="tab in browser.openInternalTabs"
-          :key="tab.id"
-          class="chrome-tab chrome-tab--internal"
-          :class="{ 'chrome-tab--active': tab.id === browser.activeTabId }"
-          type="button"
-          @click="activateInternalTab(tab.id)"
-        >
-          <Download v-if="tab.id === browser.downloadsTabId" theme="outline" size="14" />
-          <Setting v-else theme="outline" size="14" />
-          <span class="chrome-tab__title">{{ tab.title }}</span>
-          <Close class="chrome-tab__close" theme="outline" size="13" @click.stop="closeInternalTab(tab.id)" />
+          <span class="chrome-tab__title">{{ topLevelTabTitle(tab) }}</span>
+          <Close class="chrome-tab__close" theme="outline" size="13" @click.stop="closeTopLevelTab(tab)" />
         </button>
 
         <button
@@ -449,9 +501,35 @@ watch(
         </button>
       </div>
 
+      <div v-if="activeSiteSessionTabs.length" class="chrome-session-tabs" aria-label="会话标签栏">
+        <button
+          v-for="tab in activeSiteSessionTabs"
+          :key="tab.id"
+          class="chrome-session-tab"
+          :class="{
+            'chrome-session-tab--active': tab.id === browser.activeTabId,
+            'chrome-session-tab--loading': isTabLoading(tab.id),
+          }"
+          type="button"
+          @click="activateBrowserTab(tab.id)"
+        >
+          <Loading
+            v-if="isTabLoading(tab.id)"
+            class="chrome-session-tab__loading"
+            theme="outline"
+            size="13"
+          />
+          <span v-else class="chrome-session-tab__icon">
+            <img v-if="browser.siteIconSrc(tab.site) || tabFaviconSrc(tab)" :src="browser.siteIconSrc(tab.site) || tabFaviconSrc(tab)" alt="" />
+            <span v-else>{{ browser.siteInitial(tab.site) }}</span>
+          </span>
+          <span class="chrome-session-tab__title">{{ sessionTabTitle(tab) }}</span>
+          <Close class="chrome-session-tab__close" theme="outline" size="12" @click.stop="closeBrowserTab(tab.id)" />
+        </button>
+      </div>
+
       <form
         class="chrome-toolbar"
-        :class="{ 'chrome-toolbar--without-session': !showSessionName }"
         aria-label="浏览器工具栏"
         @submit.prevent="navigate"
       >
@@ -471,123 +549,78 @@ watch(
           <Refresh v-else theme="outline" size="18" />
         </button>
 
-        <div
-          v-if="showSessionName"
-          class="chrome-session-name"
-          :title="selectedSessionName"
-        >
-          <span class="chrome-session-name__dot"></span>
-          <span class="chrome-session-name__text">{{ selectedSessionName }}</span>
-        </div>
-
-        <div class="address-box">
+        <div class="address-box" :class="{ 'address-box--with-session': currentSessionName }">
           <span class="address-box__status">
             {{ isHomeActive ? '起始页' : isDownloadsActive ? '下载' : isSettingsActive ? '设置' : browser.browserState.errorText ? '失败' : browser.browserState.isLoading ? '加载中' : '站点' }}
+          </span>
+          <span v-if="currentSessionName" class="address-box__session" :title="currentSessionName">
+            <span class="address-box__session-dot" aria-hidden="true"></span>
+            {{ currentSessionName }}
           </span>
           <input
             :value="displayedAddress"
             type="text"
             aria-label="地址栏"
             placeholder="输入网址"
-            :disabled="isInternalPageActive"
             @input="browser.address = ($event.target as HTMLInputElement).value"
           />
         </div>
 
-        <div
-          class="chrome-extension-actions"
-          :class="{ 'chrome-extension-actions--empty': browser.popupExtensions.length === 0 }"
-          aria-label="插件面板"
-        >
+        <div class="chrome-toolbar-menu-wrap">
           <button
-            v-for="extension in browser.popupExtensions"
-            :key="extension.id"
             type="button"
-            :title="extensionActionTitle(extension)"
-            @click="openExtensionPopup(extension, $event)"
+            title="扩展程序"
+            @click="openExtensionMenuOverlay"
           >
-            <img v-if="extensionActionIcon(extension)" :src="extensionActionIcon(extension)" alt="" />
-            <Plug v-else theme="outline" size="17" />
+            <Puzzle theme="outline" size="18" />
           </button>
         </div>
 
-        <button
-          type="button"
-          title="会话管理"
-          :class="{ 'chrome-toolbar-button--active': activePanel === 'sessionDrawer' }"
-          :disabled="isInternalPageActive"
-          @click="togglePanel('sessionDrawer')"
-        >
-          <Time theme="outline" size="18" />
-        </button>
-        <button
-          type="button"
-          title="插件管理"
-          :class="{ 'chrome-toolbar-button--active': activePanel === 'extensionManager' }"
-          :disabled="isInternalPageActive"
-          @click="openExtensionManager"
-        >
-          <Plug theme="outline" size="18" />
-        </button>
-        <button
-          type="button"
-          title="Jarvis 脚本"
-          :class="{ 'chrome-toolbar-button--active': activePanel === 'scriptManager' }"
-          :disabled="isInternalPageActive"
-          @click="openScriptManager"
-        >
-          <Code theme="outline" size="18" />
-        </button>
-        <button
-          class="chrome-download-button"
-          type="button"
-          title="下载内容"
-          :class="{
-            'chrome-download-button--active': activeDownloadCount > 0,
-            'chrome-toolbar-button--active': isDownloadsActive,
-          }"
-          :style="{ '--download-progress-value': downloadProgress }"
-          @click="openDownloads"
-        >
-          <svg class="chrome-download-button__ring" viewBox="0 0 32 32" aria-hidden="true">
-            <circle
-              class="chrome-download-button__ring-track"
-              cx="16"
-              cy="16"
-              r="11"
-            />
-            <circle
-              class="chrome-download-button__ring-progress"
-              cx="16"
-              cy="16"
-              r="11"
-            />
-          </svg>
-          <Download theme="outline" size="18" />
-          <span v-if="activeDownloadCount > 0" class="chrome-download-button__badge">{{ activeDownloadCount }}</span>
-        </button>
-        <button
-          type="button"
-          title="设置"
-          :class="{ 'chrome-toolbar-button--active': isSettingsActive }"
-          @click="openSettings"
-        >
-          <Setting theme="outline" size="18" />
-        </button>
+        <div class="chrome-toolbar-menu-wrap">
+          <button
+            class="chrome-download-button"
+            type="button"
+            title="下载内容"
+            :class="{
+              'chrome-download-button--active': activeDownloadCount > 0,
+              'chrome-toolbar-button--active': isDownloadsActive,
+            }"
+            :style="{ '--download-progress-value': downloadProgress }"
+            @click="openDownloadsBubbleOverlay"
+          >
+            <svg class="chrome-download-button__ring" viewBox="0 0 32 32" aria-hidden="true">
+              <circle
+                class="chrome-download-button__ring-track"
+                cx="16"
+                cy="16"
+                r="11"
+              />
+              <circle
+                class="chrome-download-button__ring-progress"
+                cx="16"
+                cy="16"
+                r="11"
+              />
+            </svg>
+            <Download theme="outline" size="18" />
+            <span v-if="activeDownloadCount > 0" class="chrome-download-button__badge">{{ activeDownloadCount }}</span>
+          </button>
+        </div>
+
+        <div class="chrome-toolbar-menu-wrap">
+          <button
+            type="button"
+            title="更多"
+            :class="{ 'chrome-toolbar-button--active': isSettingsActive }"
+            @click="openAppMenuOverlay"
+          >
+            <More theme="outline" size="18" />
+          </button>
+        </div>
       </form>
     </section>
 
     <section ref="browserHost" class="browser-viewport">
-      <SitesView v-if="isHomeActive" />
-      <DownloadsView v-else-if="isDownloadsActive" />
-      <SettingsView v-else-if="isSettingsActive" />
-      <div v-else-if="!browser.selectedSession" class="browser-placeholder">
-        <p>当前站点还没有会话</p>
-        <ElButton type="primary" @click="openCurrentSessionCreator()">
-          <AddOne theme="outline" size="18" />
-          新建会话
-        </ElButton>
-      </div>
       <SessionDrawer
         v-model="sessionDrawerVisible"
         :selected-url="selectedUrl"
@@ -603,15 +636,6 @@ watch(
         @create-session="openPickerSessionCreator"
         @open-session="openSessionFromPicker"
         @update:model-value="(visible) => syncPanelVisibility('tabPicker', visible)"
-      />
-
-      <ExtensionManager
-        v-model="extensionManagerVisible"
-        @update:model-value="(visible) => syncPanelVisibility('extensionManager', visible)"
-      />
-      <JarvisScriptManager
-        v-model="scriptManagerVisible"
-        @update:model-value="(visible) => syncPanelVisibility('scriptManager', visible)"
       />
 
       <BrowserDrawer
@@ -633,34 +657,48 @@ watch(
 </template>
 
 <style scoped>
+.chrome-top--with-session-tabs {
+  grid-template-rows: var(--titlebar-height) 34px 48px;
+}
+
 .chrome-toolbar {
-  grid-template-columns: repeat(3, 32px) minmax(36px, max-content) minmax(220px, 1fr) max-content repeat(5, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
 }
 
-.chrome-toolbar--without-session {
-  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) max-content repeat(5, 32px);
+.chrome-tab--site-container {
+  background: #d8dce3;
 }
 
-.chrome-session-name {
-  display: inline-flex;
-  min-width: 36px;
-  height: 24px;
-  align-items: center;
-  gap: 6px;
-  align-self: center;
-  justify-self: start;
-  border: 1px solid #dadce0;
-  border-radius: 999px;
-  padding: 0 9px;
+.chrome-tab.chrome-tab--active,
+.chrome-tab.chrome-tab--site-container.chrome-tab--active {
   background: #ffffff;
-  color: #3c4043;
+  color: #202124;
+}
+
+.chrome-tab.chrome-tab--active {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.92) inset;
+}
+
+.address-box--with-session {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
+.address-box__session {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #ffffff;
+  color: #1a73e8;
   font-size: 12px;
   font-weight: 500;
-  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
-  -webkit-app-region: no-drag;
+  white-space: nowrap;
 }
 
-.chrome-session-name__dot {
+.address-box__session-dot {
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
@@ -668,47 +706,90 @@ watch(
   background: #1a73e8;
 }
 
-.chrome-session-name__text {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.chrome-extension-actions {
+.chrome-session-tabs {
   display: flex;
-  max-width: 116px;
   min-width: 0;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   overflow: hidden;
+  border-top: 1px solid rgba(60, 64, 67, 0.08);
+  padding: 3px 10px;
+  background: #eef1f5;
+  -webkit-app-region: drag;
 }
 
-.chrome-extension-actions--empty {
-  width: 0;
-}
-
-.chrome-extension-actions button {
-  display: inline-flex;
-  width: 28px;
+.chrome-session-tab {
+  display: grid;
+  width: 168px;
+  min-width: 92px;
+  max-width: 188px;
   height: 28px;
-  flex: 0 0 28px;
+  grid-template-columns: auto minmax(0, 1fr) 18px;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  gap: 6px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 7px;
+  padding: 0 8px;
   background: transparent;
   color: #3c4043;
+  text-align: left;
   -webkit-app-region: no-drag;
 }
 
-.chrome-extension-actions button:hover {
-  background: #e8eaed;
+.chrome-session-tab:hover {
+  background: rgba(60, 64, 67, 0.1);
 }
 
-.chrome-extension-actions img {
+.chrome-session-tab--active {
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
+}
+
+.chrome-session-tab__loading {
+  color: #5f6368;
+  animation: tab-loading-spin 850ms linear infinite;
+}
+
+.chrome-session-tab__icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #eef2f7;
+  color: #5f6368;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.chrome-session-tab__icon img {
+  width: 13px;
+  height: 13px;
+  object-fit: contain;
+}
+
+.chrome-session-tab__title {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome-session-tab__close {
+  display: inline-flex;
   width: 18px;
   height: 18px;
-  object-fit: contain;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #5f6368;
+}
+
+.chrome-session-tab__close:hover {
+  background: #e8eaed;
 }
 
 .chrome-toolbar .chrome-toolbar-button--active,
@@ -786,5 +867,13 @@ watch(
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
+}
+
+.chrome-toolbar-menu-wrap {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  -webkit-app-region: no-drag;
 }
 </style>

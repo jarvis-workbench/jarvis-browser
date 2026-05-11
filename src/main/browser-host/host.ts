@@ -1,49 +1,89 @@
-import {
-  BrowserWindow,
-  WebContentsView,
-} from "electron";
+import { BrowserWindow, WebContentsView, session as electronSession, shell } from "electron";
 import { join } from "node:path";
-import type { BrowserRect, BrowserState, CookieRemoveDetails, CookieSetDetails } from "../../shared/types";
+import type {
+  BrowserInternalPageId,
+  BrowserNavigationResult,
+  BrowserRect,
+  BrowserState,
+  BrowserTab,
+  BrowserTabKind,
+  CookieRemoveDetails,
+  CookieSetDetails,
+} from "../../shared/types";
 import { clampBrowserBounds, defaultBrowserBounds } from "../browser-bounds";
 import { DownloadManager } from "../download-manager";
-import { createErrorPageUrl, isInternalErrorPageUrl, registerErrorPageProtocolForSession } from "../error-page";
-import { flushElectronSession, getElectronSession } from "../electron-session-manager";
+import {
+  createDefaultProfilePartition,
+  createSessionPartition,
+  flushElectronSession,
+  getDefaultProfileSession,
+  getElectronSession,
+} from "../electron-session-manager";
 import { ExtensionRuntime } from "../extension-runtime";
+import { HistoryManager } from "../history-manager";
+import {
+  createInternalErrorPageUrl,
+  internalPageUrls,
+  isInternalErrorPageUrl,
+  isInternalPageUrl,
+  registerInternalProtocolForSession,
+} from "../internal-protocol";
 import { JarvisScriptManager } from "../jarvis-script/manager";
 import { JarvisScriptRuntime } from "../jarvis-script/runtime";
-import { PopupWindowManager } from "../popup-window-manager";
+import { BrowserOverlayHost } from "../browser-overlay-host";
+import {
+  createAppMenuItems,
+  createDownloadMenuItems,
+  createExtensionMenuItems,
+  getToolOverlayHeight,
+  toolOverlayUrl,
+  type BrowserOverlayAction,
+  type BrowserOverlayMenuModel,
+} from "../browser-overlay-menu";
 import { MetadataStore, normalizeHttpUrl } from "../store";
-import { createViewKey, parseViewKey } from "./keys";
+import { createTabViewKey, parseViewKey } from "./keys";
 import { ViewLifecycle } from "./lifecycle";
 import { JarvisMonitorController } from "./monitor/controller";
 import { formatNavigationError, isBrowserDevToolsShortcut, isBrowserReloadShortcut, isNavigationAbort } from "./navigation";
+import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
 import { createBrowserState, fallbackBrowserState } from "./state";
 import { ViewRegistry } from "./view-registry";
 
+const now = () => new Date().toISOString();
+
+const createId = () => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+
 export class BrowserHost {
   private readonly views = new Map<string, WebContentsView>();
+  private readonly tabs = new Map<string, BrowserTab>();
   private readonly viewStates = new Map<string, BrowserState>();
   private readonly lifecycle = new ViewLifecycle();
   private readonly failedNavigationUrls = new Map<string, string>();
   private readonly failedNavigationStatusCodes = new Map<string, number>();
+  private readonly externalNavigationUrls = new Map<string, string>();
   private readonly responseStatusCodes = new Map<string, number>();
-  private openRequestSeq = 0;
-  private siteId?: string;
-  private sessionId?: string;
+  private activeTabId?: string;
   private bounds = defaultBrowserBounds;
   private readonly downloadManager: DownloadManager;
   private readonly extensionRuntime: ExtensionRuntime;
   private readonly jarvisScriptRuntime: JarvisScriptRuntime;
   private readonly jarvisScriptManager: JarvisScriptManager;
   private readonly viewRegistry: ViewRegistry;
-  private readonly popupWindowManager: PopupWindowManager;
+  private readonly browserOverlayHost: BrowserOverlayHost;
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly store: MetadataStore,
+    private readonly historyManager: HistoryManager,
   ) {
     this.viewRegistry = new ViewRegistry(window, this.views, () => this.bounds);
-    this.popupWindowManager = new PopupWindowManager(window);
+    this.browserOverlayHost = new BrowserOverlayHost(window);
     this.downloadManager = new DownloadManager(window, store);
     this.extensionRuntime = new ExtensionRuntime(window, store, (key, targetSession) => {
       this.downloadManager.bindSession(key, targetSession);
@@ -60,60 +100,201 @@ export class BrowserHost {
   }
 
   async open(siteId: string, sessionId: string) {
-    const openRequestId = ++this.openRequestSeq;
-    const site = this.store.getSite(siteId);
-    const siteSession = this.store.getSession(siteId, sessionId);
+    await this.createSiteTab({ siteId, sessionId });
+  }
+
+  async createTab(input: { url?: string; openerTabId?: string } = {}) {
+    const opener = input.openerTabId ? this.tabs.get(input.openerTabId) : undefined;
+    const partition = opener?.partition ?? createDefaultProfilePartition();
+    const targetSession = opener?.siteId && opener.sessionId
+      ? getElectronSession(opener.siteId, opener.sessionId)
+      : electronSession.fromPartition(partition);
+    const navigationTarget = input.url ? resolveNavigationTarget(input.url) : undefined;
+    if (navigationTarget?.kind === "external") {
+      await this.openExternalTarget(navigationTarget);
+      throw new Error("外部协议不在新标签页中打开");
+    }
+    if (navigationTarget?.kind === "blocked") {
+      throw new Error(navigationTarget.errorText);
+    }
+
+    const url = navigationTarget?.url ?? internalPageUrls.newtab;
+    const kind: BrowserTabKind = input.url ? "default" : "internal";
+    const tab = this.createTabRecord({
+      kind,
+      url,
+      title: kind === "internal" ? "新标签页" : "新标签",
+      partition,
+      siteId: opener?.siteId,
+      sessionId: opener?.sessionId,
+      openerTabId: input.openerTabId,
+      internalPageId: kind === "internal" ? "newtab" : undefined,
+    });
+
+    if (tab.kind === "default") {
+      await this.extensionRuntime.loadEnabledForDefaultProfile();
+      await this.jarvisScriptRuntime.refreshUserScriptWorkers();
+    }
+    await this.createViewForTab(tab, targetSession);
+    await this.activateTab(tab.id);
+    await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
+    this.emitTabsChanged();
+    return structuredClone(tab);
+  }
+
+  async createSiteTab(input: { siteId: string; sessionId: string }) {
+    const site = this.store.getSite(input.siteId);
+    const siteSession = this.store.getSession(input.siteId, input.sessionId);
     if (!site || !siteSession) {
       throw new Error("会话不存在");
     }
 
-    this.popupWindowManager.closePopup();
-    this.siteId = siteId;
-    this.sessionId = sessionId;
-    const viewKey = createViewKey(siteId, sessionId);
-    let view = this.views.get(viewKey);
-
-    if (!view) {
-      const targetSession = getElectronSession(siteId, sessionId);
-      registerErrorPageProtocolForSession(targetSession);
-      this.downloadManager.bindSession(viewKey, targetSession);
-
-      view = new WebContentsView({
-        webPreferences: {
-          session: targetSession,
-          preload: join(__dirname, "../../preload/error-page-preload.js"),
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-        },
-      });
-
-      this.views.set(viewKey, view);
-      this.lifecycle.markOpen(viewKey);
-      this.bindNavigationEvents(view, siteId, sessionId);
-      this.bindMonitor(view, siteId, sessionId, viewKey);
-      this.updateViewState(viewKey, view, { siteId, sessionId, url: site.url });
-      this.activateViewIfCurrent(viewKey);
-      await this.extensionRuntime.loadEnabledForSite(site);
-      await this.jarvisScriptRuntime.refreshUserScriptWorkers();
-      await this.loadUrlSafely(normalizeHttpUrl(site.url), view, viewKey);
+    const existing = [...this.tabs.values()].find((tab) =>
+      tab.kind === "site" && tab.siteId === input.siteId && tab.sessionId === input.sessionId,
+    );
+    if (existing) {
+      await this.activateTab(existing.id);
+      return structuredClone(existing);
     }
 
-    if (this.isLatestOpenForCurrentView(openRequestId, viewKey)) {
-      this.activateViewIfCurrent(viewKey);
-      this.emitBrowserState(viewKey);
+    const partition = createSessionPartition(input.siteId, input.sessionId);
+    const tab = this.createTabRecord({
+      kind: "site",
+      url: site.url,
+      title: siteSession.name,
+      favicon: site.faviconPath || site.faviconUrl,
+      siteId: input.siteId,
+      sessionId: input.sessionId,
+      partition,
+    });
+    const targetSession = getElectronSession(input.siteId, input.sessionId);
+
+    await this.createViewForTab(tab, targetSession);
+    await this.extensionRuntime.loadEnabledForSite(site);
+    await this.jarvisScriptRuntime.refreshUserScriptWorkers();
+    await this.activateTab(tab.id);
+    await this.loadUrlSafely(normalizeHttpUrl(site.url), this.views.get(tab.id), tab.id);
+    this.emitTabsChanged();
+    return structuredClone(tab);
+  }
+
+  async openInternalPage(input: { pageId: BrowserInternalPageId }) {
+    const existing = [...this.tabs.values()].find((tab) => tab.kind === "internal" && tab.internalPageId === input.pageId);
+    if (existing) {
+      await this.activateTab(existing.id);
+      return structuredClone(existing);
     }
+
+    const url = internalPageUrls[input.pageId];
+    const tab = this.createTabRecord({
+      kind: "internal",
+      url,
+      title: titleForInternalPage(input.pageId),
+      partition: createDefaultProfilePartition(),
+      internalPageId: input.pageId,
+    });
+
+    await this.createViewForTab(tab, getDefaultProfileSession());
+    await this.activateTab(tab.id);
+    await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
+    this.emitTabsChanged();
+    return structuredClone(tab);
+  }
+
+  listTabs() {
+    return {
+      activeTabId: this.activeTabId,
+      tabs: [...this.tabs.values()].map((tab) => structuredClone(tab)),
+    };
+  }
+
+  async activateTab(tabId: string) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) {
+      throw new Error("标签不存在");
+    }
+
+    this.browserOverlayHost.closeOverlay();
+    this.activeTabId = tab.id;
+    this.viewRegistry.activate(tab.id);
+    this.emitBrowserState(tab.id);
+    this.emitTabsChanged();
+  }
+
+  async closeTab(tabId: string) {
+    const tab = this.tabs.get(tabId);
+    const view = this.views.get(tabId);
+    if (!tab) {
+      return;
+    }
+
+    if (view) {
+      await this.flushViewSession(view);
+      this.destroyView(tabId, view);
+      this.views.delete(tabId);
+    }
+    this.tabs.delete(tabId);
+    this.viewStates.delete(tabId);
+    this.cleanupViewLifecycle(tabId);
+
+    if (this.activeTabId === tabId) {
+      const nextTab = [...this.tabs.values()].at(-1);
+      this.activeTabId = undefined;
+      if (nextTab) {
+        await this.activateTab(nextTab.id);
+      } else {
+        await this.openInternalPage({ pageId: "newtab" });
+        return;
+      }
+    }
+
+    this.emitTabsChanged();
+  }
+
+  async navigateTab(tabId: string, url: string): Promise<BrowserNavigationResult> {
+    const tab = this.requireTab(tabId);
+    const previousUrl = tab.url;
+    const previousTitle = tab.title;
+    const target = resolveNavigationTarget(url);
+
+    if (target.kind === "external") {
+      await this.openExternalTarget(target, tabId);
+      this.emitBrowserState(tabId);
+      this.emitTabsChanged();
+      return toNavigationResult(target);
+    }
+
+    if (target.kind === "blocked") {
+      await this.loadErrorPage(target.url, target.errorText, this.views.get(tabId), tabId);
+      return toNavigationResult(target);
+    }
+
+    tab.url = target.url;
+    tab.updatedAt = now();
+    await this.loadUrlSafely(target.url, this.views.get(tabId), tabId);
+    if (this.failedNavigationUrls.has(tabId)) {
+      tab.url = previousUrl;
+      tab.title = previousTitle;
+      tab.updatedAt = now();
+      this.emitTabsChanged();
+      return {
+        kind: "blocked",
+        url: target.url,
+        errorText: this.failedNavigationUrls.get(tabId) === target.url
+          ? this.viewStates.get(tabId)?.errorText || "页面加载失败"
+          : "页面加载失败",
+      };
+    }
+
+    this.emitTabsChanged();
+    return toNavigationResult(target);
   }
 
   async navigate(url: string) {
-    const active = this.requireActiveSession();
-    const nextUrl = normalizeHttpUrl(url);
-    const viewKey = createViewKey(active.siteId, active.sessionId);
-    await this.loadUrlSafely(nextUrl, this.getActiveView(), viewKey);
+    return this.navigateTab(this.requireActiveTab().id, url);
   }
 
   back() {
-    this.requireActiveSession();
     const view = this.getActiveView();
     if (view.webContents.navigationHistory.canGoBack()) {
       view.webContents.navigationHistory.goBack();
@@ -121,7 +302,6 @@ export class BrowserHost {
   }
 
   forward() {
-    this.requireActiveSession();
     const view = this.getActiveView();
     if (view.webContents.navigationHistory.canGoForward()) {
       view.webContents.navigationHistory.goForward();
@@ -129,97 +309,65 @@ export class BrowserHost {
   }
 
   reload() {
-    this.requireActiveSession();
     this.getActiveView().webContents.reload();
   }
 
   openDevTools() {
-    this.requireActiveSession();
-    this.getActiveView().webContents.openDevTools({ mode: "detach" });
+    const webContents = this.getActiveView().webContents;
+    if (webContents.isDevToolsOpened()) {
+      webContents.closeDevTools();
+      return;
+    }
+
+    const restoreMainWindowFocus = () => {
+      if (!this.window.isDestroyed() && !this.window.isFocused()) {
+        this.window.focus();
+      }
+    };
+
+    webContents.once("devtools-opened", restoreMainWindowFocus);
+
+    try {
+      // Intentionally omit `mode` so Chromium can reuse the last selected dock state
+      // instead of forcing Electron's non-dockable `detach` mode.
+      (webContents.openDevTools as (options?: { activate?: boolean; title?: string }) => void)({
+        activate: false,
+      });
+    } catch (error) {
+      webContents.removeListener("devtools-opened", restoreMainWindowFocus);
+      throw error;
+    }
   }
 
   async reloadErrorPage() {
-    const active = this.requireActiveSession();
-    const viewKey = createViewKey(active.siteId, active.sessionId);
-    const targetUrl = this.failedNavigationUrls.get(viewKey);
+    const tab = this.requireActiveTab();
+    const targetUrl = this.failedNavigationUrls.get(tab.id);
     if (!targetUrl) {
       this.reload();
       return;
     }
 
-    this.failedNavigationStatusCodes.delete(viewKey);
-    this.responseStatusCodes.delete(viewKey);
-    await this.loadUrlSafely(targetUrl, this.getActiveView(), viewKey);
-  }
-
-  private async showHttpErrorPage(siteId: string, sessionId: string, url: string, statusCode: number) {
-    const viewKey = createViewKey(siteId, sessionId);
-    const view = this.views.get(viewKey);
-    if (!view || view.webContents.isDestroyed()) {
-      return;
-    }
-
-    this.failedNavigationUrls.set(viewKey, url);
-    this.failedNavigationStatusCodes.set(viewKey, statusCode);
-    this.responseStatusCodes.delete(viewKey);
-    await view.webContents.loadURL(createErrorPageUrl({
-      kind: "http",
-      url,
-      statusCode,
-      errorText: `请求失败，状态码：${statusCode}`,
-    }));
-    this.emitBrowserState(viewKey, `HTTP ${statusCode}`);
-  }
-
-  private async handleHttpStatusPage(viewKey: string, url: string, statusCode: number) {
-    if (isInternalErrorPageUrl(url) || statusCode < 400) {
-      return;
-    }
-
-    const view = this.views.get(viewKey);
-    if (!view || view.webContents.isDestroyed()) {
-      return;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    if (!this.views.has(viewKey) || view.webContents.isDestroyed()) {
-      return;
-    }
-
-    const bodyText = await view.webContents.executeJavaScript(
-      "document.body ? document.body.innerText.trim() : ''",
-      true,
-    ).catch(() => "");
-    if (bodyText) {
-      this.emitBrowserState(viewKey, `HTTP ${statusCode}`);
-      return;
-    }
-
-    const ids = parseViewKey(viewKey);
-    await this.showHttpErrorPage(ids.siteId, ids.sessionId, url, statusCode);
+    this.failedNavigationStatusCodes.delete(tab.id);
+    this.responseStatusCodes.delete(tab.id);
+    await this.loadUrlSafely(targetUrl, this.getActiveView(), tab.id);
   }
 
   stop() {
-    this.requireActiveSession();
     this.getActiveView().webContents.stop();
   }
 
-  showHome() {
-    this.popupWindowManager.closePopup();
-    this.siteId = undefined;
-    this.sessionId = undefined;
-    this.unmountActiveView();
-    this.emitHomeState();
+  async showHome() {
+    await this.openInternalPage({ pageId: "newtab" });
   }
 
   hideEmbeddedView() {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     this.unmountActiveView();
   }
 
   showActiveView() {
-    if (this.siteId && this.sessionId) {
-      this.activateView(this.siteId, this.sessionId);
+    if (this.activeTabId) {
+      this.viewRegistry.activate(this.activeTabId);
     }
   }
 
@@ -229,57 +377,42 @@ export class BrowserHost {
   }
 
   async close() {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     for (const [viewKey, view] of this.views) {
       await this.flushViewSession(view);
       this.destroyView(viewKey, view);
     }
     this.views.clear();
+    this.tabs.clear();
     this.viewStates.clear();
     this.lifecycle.clear();
     this.failedNavigationUrls.clear();
     this.failedNavigationStatusCodes.clear();
     this.responseStatusCodes.clear();
-    this.siteId = undefined;
-    this.sessionId = undefined;
+    this.activeTabId = undefined;
     this.viewRegistry.setMountedViewKey(undefined);
     this.jarvisScriptRuntime.close();
   }
 
   async closeSession(siteId: string, sessionId: string) {
-    if (this.siteId === siteId && this.sessionId === sessionId) {
-      this.popupWindowManager.closePopup();
-    }
-    const viewKey = createViewKey(siteId, sessionId);
-    const view = this.views.get(viewKey);
-    if (view) {
-      await this.flushViewSession(view);
-      this.destroyView(viewKey, view);
-      this.views.delete(viewKey);
-    }
-    this.viewStates.delete(viewKey);
-    this.failedNavigationUrls.delete(viewKey);
-    this.failedNavigationStatusCodes.delete(viewKey);
-    this.responseStatusCodes.delete(viewKey);
-    if (this.siteId === siteId && this.sessionId === sessionId) {
-      this.siteId = undefined;
-      this.sessionId = undefined;
-      this.viewRegistry.setMountedViewKey(undefined);
+    const matchingTabs = [...this.tabs.values()].filter((tab) => tab.siteId === siteId && tab.sessionId === sessionId);
+    for (const tab of matchingTabs) {
+      await this.closeTab(tab.id);
     }
   }
 
   getActiveSiteId() {
-    return this.siteId;
+    return this.requireActiveTabOrUndefined()?.siteId;
   }
 
   isActiveSession(siteId: string, sessionId: string) {
-    return this.siteId === siteId && this.sessionId === sessionId;
+    const tab = this.requireActiveTabOrUndefined();
+    return tab?.siteId === siteId && tab.sessionId === sessionId;
   }
 
   getDebugState() {
     return {
-      activeSiteId: this.siteId,
-      activeSessionId: this.sessionId,
+      activeTabId: this.activeTabId,
       viewCount: this.views.size,
       viewKeys: [...this.views.keys()],
     };
@@ -298,12 +431,12 @@ export class BrowserHost {
   }
 
   async disableGlobalExtension(extensionId: string) {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     return this.extensionRuntime.disableGlobal(extensionId);
   }
 
   async uninstallGlobalExtension(extensionId: string) {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     await this.extensionRuntime.uninstallGlobal(extensionId);
   }
 
@@ -312,58 +445,218 @@ export class BrowserHost {
   }
 
   async disableSiteExtension(siteId: string, extensionId: string) {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     return this.extensionRuntime.disableSite(siteId, extensionId);
   }
 
   async uninstallSiteExtension(siteId: string, extensionId: string) {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
     await this.extensionRuntime.uninstallSite(siteId, extensionId);
   }
 
   async openExtensionPopup(input: { siteId: string; sessionId: string; extensionId: string; anchor: BrowserRect }) {
-    if (this.siteId !== input.siteId || this.sessionId !== input.sessionId) {
-      throw new Error("插件面板只能在当前活跃会话中打开");
+    const activeTab = this.requireActiveTab();
+    if (activeTab.siteId !== input.siteId || activeTab.sessionId !== input.sessionId) {
+      throw new Error("扩展程序面板只能在当前活跃会话中打开");
     }
 
     const site = this.store.getSite(input.siteId);
-    const session = this.store.getSession(input.siteId, input.sessionId);
-    if (!site || !session) {
+    const siteSession = this.store.getSession(input.siteId, input.sessionId);
+    if (!site || !siteSession) {
       throw new Error("会话不存在");
     }
 
     const extension = this.store.getGlobalExtension(input.extensionId)
       ?? site.extensions.find((item) => item.id === input.extensionId);
     if (!extension || !extension.enabled) {
-      throw new Error("插件未启用");
+      throw new Error("扩展程序未启用");
     }
 
-    await this.popupWindowManager.openExtensionPopup({
-      kind: "extension-action",
-      siteId: input.siteId,
-      sessionId: input.sessionId,
-      extension,
+    const defaultPopup = extension.action?.defaultPopup?.trim();
+    if (!defaultPopup) {
+      throw new Error("扩展程序未声明 popup 面板");
+    }
+
+    const targetSession = getElectronSession(input.siteId, input.sessionId);
+    const loadedExtension = targetSession.getAllExtensions()
+      .find((item) => item.id === extension.id || item.path === extension.path);
+    if (!loadedExtension) {
+      throw new Error("扩展程序尚未加载到当前会话");
+    }
+
+    const popupKey = `extension-action:${input.siteId}:${input.sessionId}:${loadedExtension.id}:${defaultPopup}`;
+    if (this.browserOverlayHost.isActive(popupKey)) {
+      this.browserOverlayHost.closeOverlay();
+      return;
+    }
+
+    const activeView = this.getActiveView();
+    const popupUrl = new URL(defaultPopup, loadedExtension.url);
+    popupUrl.searchParams.set("jarvisTabId", String(activeView.webContents.id));
+    popupUrl.searchParams.set("jarvisTabUrl", activeView.webContents.getURL());
+    const title = activeView.webContents.getTitle();
+    if (title) {
+      popupUrl.searchParams.set("jarvisTabTitle", title);
+    }
+
+    const { popupWindow } = this.browserOverlayHost.openOverlayWindow({
+      key: popupKey,
       anchor: input.anchor,
-      targetTab: {
-        id: this.getActiveView().webContents.id,
-        url: this.getActiveView().webContents.getURL(),
-        title: this.getActiveView().webContents.getTitle(),
+      width: 360,
+      height: 520,
+      webPreferences: {
+        session: targetSession,
+        preload: join(__dirname, "../../preload/extension-popup-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
       },
+    });
+    await popupWindow.loadURL(popupUrl.toString()).catch((error: unknown) => {
+      this.browserOverlayHost.closeOverlay();
+      throw error;
     });
   }
 
   closeExtensionPopup() {
-    this.popupWindowManager.closePopup();
+    this.browserOverlayHost.closeOverlay();
+  }
+
+  async openExtensionMenu(input: { anchor: BrowserRect }) {
+    const activeTab = this.requireActiveTabOrUndefined();
+    const site = activeTab?.siteId ? this.store.getSite(activeTab.siteId) : undefined;
+    const extensions = [
+      ...this.store.listGlobalExtensions(),
+      ...(site?.extensions ?? []),
+    ].filter((extension) => extension.enabled && Boolean(extension.action?.defaultPopup));
+    await this.openToolMenuOverlay({
+      key: "extension-menu",
+      title: "扩展程序",
+      subtitle: `${extensions.length} 个可操作扩展`,
+      anchor: input.anchor,
+      width: 310,
+      items: createExtensionMenuItems({
+        extensions,
+        canInstallSiteExtension: Boolean(site),
+      }),
+      emptyText: "当前没有可弹出的扩展",
+    });
+  }
+
+  async openDownloadsBubble(input: { anchor: BrowserRect }) {
+    const downloads = this.store.listDownloads();
+    await this.openToolMenuOverlay({
+      key: "downloads-bubble",
+      title: "下载内容",
+      subtitle: downloads.some((download) => download.state === "progressing") ? "正在下载" : "最近下载",
+      anchor: input.anchor,
+      width: 320,
+      items: createDownloadMenuItems(downloads),
+      emptyText: "暂无下载记录",
+    });
+  }
+
+  async openAppMenu(input: { anchor: BrowserRect }) {
+    await this.openToolMenuOverlay({
+      key: "app-menu",
+      title: "更多",
+      anchor: input.anchor,
+      width: 240,
+      items: createAppMenuItems(),
+    });
+  }
+
+  closeOverlay() {
+    this.browserOverlayHost.closeOverlay();
+  }
+
+  private async openToolMenuOverlay(input: BrowserOverlayMenuModel & {
+    key: string;
+    anchor: BrowserRect;
+    width: number;
+  }) {
+    await this.browserOverlayHost.openToolOverlay({
+      key: input.key,
+      anchor: input.anchor,
+      width: input.width,
+      height: getToolOverlayHeight(input),
+      url: toolOverlayUrl,
+      data: {
+        title: input.title,
+        subtitle: input.subtitle,
+        anchor: input.anchor,
+        items: input.items,
+        emptyText: input.emptyText,
+      } satisfies BrowserOverlayMenuModel,
+    });
+  }
+
+  async handleOverlayAction(input: { action: BrowserOverlayAction; id: string; anchor?: BrowserRect }) {
+    if (input.action === "extension-popup") {
+      if (!input.anchor) {
+        throw new Error("浮层动作缺少锚点");
+      }
+      this.browserOverlayHost.closeOverlay();
+      const activeTab = this.requireActiveTab();
+      if (!activeTab.siteId || !activeTab.sessionId) {
+        throw new Error("当前标签不是站点会话");
+      }
+      await this.openExtensionPopup({
+        siteId: activeTab.siteId,
+        sessionId: activeTab.sessionId,
+        extensionId: input.id,
+        anchor: input.anchor,
+      });
+      return;
+    }
+
+    this.browserOverlayHost.closeOverlay();
+    if (input.action === "extensions") {
+      await this.openInternalPage({ pageId: "extensions" });
+      return;
+    }
+
+    if (input.action === "install-site-extension") {
+      const activeTab = this.requireActiveTab();
+      if (activeTab.siteId) {
+        await this.installSiteUnpacked(activeTab.siteId);
+      }
+      return;
+    }
+
+    if (input.action === "downloads") {
+      await this.openInternalPage({ pageId: "downloads" });
+      return;
+    }
+
+    if (input.action === "settings") {
+      await this.openInternalPage({ pageId: "settings" });
+      return;
+    }
+
+    if (input.action === "history") {
+      await this.openInternalPage({ pageId: "history" });
+      return;
+    }
+
+    if (input.action === "clear-browsing-data") {
+      await this.openInternalPage({ pageId: "clear-browsing-data" });
+      return;
+    }
+
+    if (input.action === "jarvis-script") {
+      await this.openInternalPage({ pageId: "jarvis-script" });
+    }
   }
 
   async setActiveSessionCookie(details: CookieSetDetails) {
-    const active = this.requireActiveSession();
+    const active = this.requireActiveSiteSession();
     const targetSession = getElectronSession(active.siteId, active.sessionId);
     await targetSession.cookies.set(toElectronCookieSetDetails(details));
   }
 
   async removeActiveSessionCookie(details: CookieRemoveDetails) {
-    const active = this.requireActiveSession();
+    const active = this.requireActiveSiteSession();
     const targetSession = getElectronSession(active.siteId, active.sessionId);
     await targetSession.cookies.remove(details.url, details.name);
   }
@@ -410,6 +703,7 @@ export class BrowserHost {
 
   bindDefaultDownloads() {
     this.downloadManager.bindDefault();
+    this.downloadManager.bindSession(createDefaultProfilePartition(), getDefaultProfileSession());
   }
 
   pauseDownload(downloadId: string) {
@@ -432,116 +726,12 @@ export class BrowserHost {
     return this.downloadManager.showInFolder(downloadId);
   }
 
-  private requireActiveSession() {
-    if (!this.siteId || !this.sessionId || !this.getActiveViewOrUndefined()) {
-      throw new Error("浏览器会话未打开");
-    }
-
-    return { siteId: this.siteId, sessionId: this.sessionId };
-  }
-
-  private bindNavigationEvents(view: WebContentsView, siteId: string, sessionId: string) {
-    const webContents = view.webContents;
-    const viewKey = createViewKey(siteId, sessionId);
-    webContents.session.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (details.webContentsId === webContents.id && details.resourceType === "mainFrame" && details.statusCode >= 400) {
-        this.responseStatusCodes.set(viewKey, details.statusCode);
-        void this.handleHttpStatusPage(viewKey, details.url, details.statusCode);
-      }
-    });
-    webContents.setWindowOpenHandler(({ url }) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return { action: "deny" };
-      }
-
-      void this.loadUrlSafely(normalizeHttpUrl(url), view, viewKey);
-      return { action: "deny" };
-    });
-    webContents.on("did-start-loading", () => {
-      if (this.isViewAlive(viewKey, webContents)) {
-        this.emitBrowserState(viewKey);
-      }
-    });
-    webContents.on("did-finish-load", () => {
-      if (this.isViewAlive(viewKey, webContents)) {
-        this.emitBrowserState(viewKey);
-      }
-    });
-    webContents.on("did-stop-loading", () => {
-      if (this.isViewAlive(viewKey, webContents)) {
-        this.emitBrowserState(viewKey);
-      }
-    });
-    webContents.on("before-input-event", (event, input) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (this.handleBrowserShortcut(input)) {
-        event.preventDefault();
-      }
-    });
-    webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (isMainFrame && errorCode !== -3) {
-        void this.loadMainFrameErrorPage(viewKey, validatedUrl, errorDescription);
-      }
-    });
-    webContents.on("did-navigate", (_event, url) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (isInternalErrorPageUrl(url)) {
-        this.emitBrowserState(viewKey);
-        return;
-      }
-      this.failedNavigationUrls.delete(viewKey);
-      this.failedNavigationStatusCodes.delete(viewKey);
-      this.responseStatusCodes.delete(viewKey);
-      this.emitBrowserState(viewKey);
-    });
-    webContents.on("did-navigate-in-page", (_event, url) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (isInternalErrorPageUrl(url)) {
-        this.emitBrowserState(viewKey);
-        return;
-      }
-      this.failedNavigationUrls.delete(viewKey);
-      this.failedNavigationStatusCodes.delete(viewKey);
-      this.responseStatusCodes.delete(viewKey);
-      this.emitBrowserState(viewKey);
-    });
-    webContents.on("page-title-updated", (_event, title) => {
-      if (!this.isViewAlive(viewKey, webContents)) {
-        return;
-      }
-
-      if (isInternalErrorPageUrl(webContents.getURL())) {
-        this.emitBrowserState(viewKey);
-        return;
-      }
-
-      this.emitBrowserState(viewKey);
-    });
-  }
-
   handleBrowserShortcut(input: Electron.Input) {
     if (isBrowserReloadShortcut(input)) {
       try {
         this.reload();
       } catch {
-        // 起始页没有 WebContentsView 时，拦截快捷键，避免刷新 renderer 丢失标签状态。
+        // 没有激活标签时忽略浏览器刷新快捷键。
       }
       return true;
     }
@@ -550,7 +740,7 @@ export class BrowserHost {
       try {
         this.openDevTools();
       } catch {
-        // 起始页没有对应网页内容时不打开 renderer 开发者工具。
+        // 没有激活标签时不打开 renderer 开发者工具。
       }
       return true;
     }
@@ -558,7 +748,280 @@ export class BrowserHost {
     return false;
   }
 
-  private bindMonitor(view: WebContentsView, siteId: string, sessionId: string, viewKey: string) {
+  private createTabRecord(input: {
+    kind: BrowserTabKind;
+    url: string;
+    title: string;
+    favicon?: string;
+    siteId?: string;
+    sessionId?: string;
+    partition: string;
+    openerTabId?: string;
+    internalPageId?: BrowserInternalPageId;
+  }) {
+    const timestamp = now();
+    const tab: BrowserTab = {
+      id: createId(),
+      kind: input.kind,
+      url: input.url,
+      title: input.title,
+      favicon: input.favicon,
+      siteId: input.siteId,
+      sessionId: input.sessionId,
+      partition: input.partition,
+      openerTabId: input.openerTabId,
+      internalPageId: input.internalPageId,
+      pinnedExtensionIds: [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.tabs.set(tab.id, tab);
+    return tab;
+  }
+
+  private async createViewForTab(tab: BrowserTab, targetSession: Electron.Session) {
+    registerInternalProtocolForSession(targetSession);
+    this.downloadManager.bindSession(tab.id, targetSession);
+
+    const view = new WebContentsView({
+      webPreferences: {
+        session: targetSession,
+        preload: tab.kind === "internal"
+          ? join(__dirname, "../../preload/preload.js")
+          : join(__dirname, "../../preload/web-page-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: tab.kind !== "internal",
+      },
+    });
+
+    this.views.set(tab.id, view);
+    this.lifecycle.markOpen(tab.id);
+    this.bindNavigationEvents(view, tab.id);
+    if (tab.kind !== "internal") {
+      this.bindMonitor(view, tab.id, tab.siteId, tab.sessionId);
+    }
+    this.updateViewState(tab.id, view, {
+      tabId: tab.id,
+      kind: tab.kind,
+      siteId: tab.siteId,
+      sessionId: tab.sessionId,
+      partition: tab.partition,
+      url: tab.url,
+      title: tab.title,
+      favicon: tab.favicon,
+    });
+  }
+
+  private bindNavigationEvents(view: WebContentsView, tabId: string) {
+    const webContents = view.webContents;
+    webContents.session.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      if (details.webContentsId === webContents.id && details.resourceType === "mainFrame" && details.statusCode >= 400) {
+        this.responseStatusCodes.set(tabId, details.statusCode);
+        void this.handleHttpStatusPage(tabId, details.url, details.statusCode);
+      }
+    });
+    webContents.setWindowOpenHandler(({ url }) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return { action: "deny" };
+      }
+
+      const target = resolveNavigationTarget(url);
+      if (target.kind === "browser") {
+        void this.createTab({ url: target.url, openerTabId: tabId });
+      } else if (target.kind === "external") {
+        void this.openExternalTarget(target, tabId);
+      } else {
+        void this.loadErrorPage(target.url, target.errorText, this.views.get(tabId), tabId);
+      }
+      return { action: "deny" };
+    });
+    webContents.on("will-navigate", (event) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      void this.handleMainFrameNavigationEvent(event, tabId, event.url, event.isMainFrame);
+    });
+    webContents.on("will-redirect", (event) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      void this.handleMainFrameNavigationEvent(event, tabId, event.url, event.isMainFrame);
+    });
+    webContents.on("did-start-loading", () => this.emitBrowserStateIfAlive(tabId, webContents));
+    webContents.on("did-finish-load", () => this.emitBrowserStateIfAlive(tabId, webContents));
+    webContents.on("did-stop-loading", () => this.emitBrowserStateIfAlive(tabId, webContents));
+    webContents.on("before-mouse-event", (_event, mouse) => {
+      if (this.isViewAlive(tabId, webContents) && mouse.type === "mouseDown") {
+        this.browserOverlayHost.dismissFromPageInteraction();
+      }
+    });
+    webContents.on("before-input-event", (event, input) => {
+      if (this.isViewAlive(tabId, webContents) && this.browserOverlayHost.dismissFromKeyboard(input)) {
+        event.preventDefault();
+        return;
+      }
+
+      if (this.isViewAlive(tabId, webContents) && this.handleBrowserShortcut(input)) {
+        event.preventDefault();
+      }
+    });
+    webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (
+        this.isViewAlive(tabId, webContents)
+        && isMainFrame
+        && errorCode !== -3
+        && validatedUrl !== this.externalNavigationUrls.get(tabId)
+      ) {
+        void this.loadMainFrameErrorPage(tabId, validatedUrl, errorDescription);
+      }
+    });
+    webContents.on("did-navigate", (_event, url) => this.handleNavigation(tabId, url));
+    webContents.on("did-navigate-in-page", (_event, url) => this.handleNavigation(tabId, url));
+    webContents.on("page-title-updated", (_event, title) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      const tab = this.tabs.get(tabId);
+      if (tab && !isInternalErrorPageUrl(webContents.getURL())) {
+        tab.title = this.resolveCanonicalTabTitle(tab, title);
+        tab.updatedAt = now();
+      }
+      this.emitBrowserState(tabId);
+      this.emitTabsChanged();
+    });
+  }
+
+  private handleNavigation(tabId: string, url: string) {
+    const view = this.views.get(tabId);
+    if (!view || !this.isViewAlive(tabId, view.webContents)) {
+      return;
+    }
+
+    if (isInternalErrorPageUrl(url)) {
+      this.emitBrowserState(tabId);
+      return;
+    }
+
+    this.failedNavigationUrls.delete(tabId);
+    this.failedNavigationStatusCodes.delete(tabId);
+    this.externalNavigationUrls.delete(tabId);
+    this.responseStatusCodes.delete(tabId);
+    const tab = this.tabs.get(tabId);
+    if (tab) {
+      const canonicalUrl = this.resolveCanonicalTabUrl(tab, url);
+      tab.url = canonicalUrl;
+      tab.title = this.resolveCanonicalTabTitle(tab, view.webContents.getTitle());
+      tab.updatedAt = now();
+      if (tab.kind !== "internal") {
+        this.recordHistoryNavigation(tab, canonicalUrl, view.webContents.getTitle());
+      }
+    }
+    this.emitBrowserState(tabId);
+    this.emitTabsChanged();
+  }
+
+  private resolveCanonicalTabUrl(tab: BrowserTab, navigatedUrl: string) {
+    if (tab.kind === "internal") {
+      return tab.internalPageId ? internalPageUrls[tab.internalPageId] : tab.url;
+    }
+
+    return isInternalPageUrl(navigatedUrl) ? tab.url : navigatedUrl;
+  }
+
+  private resolveCanonicalTabTitle(tab: BrowserTab, pageTitle?: string) {
+    if (tab.kind === "internal" && tab.internalPageId) {
+      return titleForInternalPage(tab.internalPageId);
+    }
+
+    return pageTitle || tab.title;
+  }
+
+  private emitBrowserStateIfAlive(tabId: string, webContents: Electron.WebContents) {
+    if (this.isViewAlive(tabId, webContents)) {
+      this.emitBrowserState(tabId);
+    }
+  }
+
+  private async handleMainFrameNavigationEvent(
+    event: Electron.Event<Electron.WebContentsWillNavigateEventParams | Electron.WebContentsWillRedirectEventParams>,
+    tabId: string,
+    url: string,
+    isMainFrame: boolean,
+  ) {
+    if (!isMainFrame) {
+      return;
+    }
+
+    const target = resolveNavigationTarget(url);
+    if (target.kind === "browser") {
+      this.externalNavigationUrls.delete(tabId);
+      return;
+    }
+
+    event.preventDefault();
+    if (target.kind === "external") {
+      await this.openExternalTarget(target, tabId);
+      this.emitBrowserState(tabId);
+      return;
+    }
+
+    await this.loadErrorPage(target.url, target.errorText, this.views.get(tabId), tabId);
+  }
+
+  private async handleHttpStatusPage(tabId: string, url: string, statusCode: number) {
+    if (isInternalErrorPageUrl(url) || statusCode < 400) {
+      return;
+    }
+
+    const view = this.views.get(tabId);
+    if (!view || view.webContents.isDestroyed()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    if (!this.views.has(tabId) || view.webContents.isDestroyed()) {
+      return;
+    }
+
+    const bodyText = await view.webContents.executeJavaScript(
+      "document.body ? document.body.innerText.trim() : ''",
+      true,
+    ).catch(() => "");
+    if (bodyText) {
+      this.emitBrowserState(tabId, `HTTP ${statusCode}`);
+      return;
+    }
+
+    await this.showHttpErrorPage(tabId, url, statusCode);
+  }
+
+  private async showHttpErrorPage(tabId: string, url: string, statusCode: number) {
+    const view = this.views.get(tabId);
+    if (!view || view.webContents.isDestroyed()) {
+      return;
+    }
+
+    this.failedNavigationUrls.set(tabId, url);
+    this.failedNavigationStatusCodes.set(tabId, statusCode);
+    this.responseStatusCodes.delete(tabId);
+    await view.webContents.loadURL(createInternalErrorPageUrl({
+      kind: "http",
+      url,
+      statusCode,
+      errorText: `请求失败，状态码：${statusCode}`,
+    }));
+    this.emitBrowserState(tabId, `HTTP ${statusCode}`);
+  }
+
+  private bindMonitor(view: WebContentsView, viewKey: string, siteId?: string, sessionId?: string) {
     const monitor = new JarvisMonitorController({
       view,
       context: {
@@ -572,6 +1035,19 @@ export class BrowserHost {
     });
     this.lifecycle.registerCleanup(viewKey, () => monitor.dispose());
     this.runViewTask(viewKey, monitor.start());
+  }
+
+  private recordHistoryNavigation(tab: BrowserTab, url: string, title?: string) {
+    void this.historyManager.recordNavigation({
+      tabId: tab.id,
+      siteId: tab.siteId,
+      sessionId: tab.sessionId,
+      partition: tab.partition,
+      url,
+      title,
+    }).catch((error: unknown) => {
+      console.error(`[history] ${tab.id} 导航记录失败`, error);
+    });
   }
 
   private async sendJarvisScriptMessageToWebContents(input: {
@@ -597,18 +1073,20 @@ export class BrowserHost {
         `window.dispatchEvent(new MessageEvent('message', { data: ${message} }))`,
         true,
       ).catch((error: unknown) => {
-        console.error(`[jarvis-script] ${viewKey} 插件消息投递失败`, error);
+        console.error(`[jarvis-script] ${viewKey} 扩展程序消息投递失败`, error);
       });
     }
   }
 
   private resolveMessageTargetViewKeys(siteId?: string, sessionId?: string) {
     if (siteId && sessionId) {
-      return [createViewKey(siteId, sessionId)];
+      return [...this.tabs.values()]
+        .filter((tab) => tab.siteId === siteId && tab.sessionId === sessionId)
+        .map((tab) => tab.id);
     }
 
     if (siteId) {
-      return [...this.views.keys()].filter((viewKey) => parseViewKey(viewKey).siteId === siteId);
+      return [...this.tabs.values()].filter((tab) => tab.siteId === siteId).map((tab) => tab.id);
     }
 
     return [...this.views.keys()];
@@ -648,26 +1126,40 @@ export class BrowserHost {
     this.lifecycle.cleanup(viewKey);
     this.failedNavigationUrls.delete(viewKey);
     this.failedNavigationStatusCodes.delete(viewKey);
+    this.externalNavigationUrls.delete(viewKey);
     this.responseStatusCodes.delete(viewKey);
   }
 
-  private async loadUrlSafely(url: string, view = this.getActiveViewOrUndefined(), viewKey = this.getActiveViewKey()) {
+  private async loadUrlSafely(url: string, view = this.getActiveViewOrUndefined(), viewKey = this.activeTabId) {
     if (!view || view.webContents.isDestroyed()) {
       return;
     }
 
+    const target = resolveNavigationTarget(url);
+    if (target.kind === "external") {
+      await this.openExternalTarget(target, viewKey);
+      return;
+    }
+    if (target.kind === "blocked") {
+      await this.loadErrorPage(target.url, target.errorText, view, viewKey);
+      return;
+    }
+
     try {
-      await view.webContents.loadURL(url);
+      if (viewKey) {
+        this.externalNavigationUrls.delete(viewKey);
+      }
+      await view.webContents.loadURL(target.url);
       const statusCode = viewKey ? this.responseStatusCodes.get(viewKey) : undefined;
       if (viewKey && statusCode && statusCode >= 400) {
-        await this.handleHttpStatusPage(viewKey, url, statusCode);
+        await this.handleHttpStatusPage(viewKey, target.url, statusCode);
       }
     } catch (error) {
       if (isNavigationAbort(error)) {
         return;
       }
 
-      await this.loadErrorPage(url, formatNavigationError(error), view, viewKey);
+      await this.loadErrorPage(target.url, formatNavigationError(error), view, viewKey);
     }
   }
 
@@ -684,7 +1176,7 @@ export class BrowserHost {
     await this.loadErrorPage(url || this.failedNavigationUrls.get(viewKey) || view.webContents.getURL(), errorText, view, viewKey);
   }
 
-  private async loadErrorPage(url: string, errorText: string, view = this.getActiveViewOrUndefined(), viewKey = this.getActiveViewKey()) {
+  private async loadErrorPage(url: string, errorText: string, view = this.getActiveViewOrUndefined(), viewKey = this.activeTabId) {
     if (!view || view.webContents.isDestroyed()) {
       return;
     }
@@ -692,9 +1184,10 @@ export class BrowserHost {
     if (viewKey) {
       this.failedNavigationUrls.set(viewKey, url);
       this.failedNavigationStatusCodes.delete(viewKey);
+      this.externalNavigationUrls.delete(viewKey);
       this.responseStatusCodes.delete(viewKey);
     }
-    await view.webContents.loadURL(createErrorPageUrl({
+    await view.webContents.loadURL(createInternalErrorPageUrl({
       kind: "network",
       url,
       errorText,
@@ -702,35 +1195,39 @@ export class BrowserHost {
     this.emitBrowserState(viewKey, `${errorText}：${url}`);
   }
 
-  private emitBrowserState(viewKey = this.getActiveViewKey(), errorText?: string) {
+  private emitBrowserState(viewKey = this.activeTabId, errorText?: string) {
     if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) {
       return;
     }
 
-    const view = viewKey ? this.views.get(viewKey) : this.getActiveViewOrUndefined();
+    const view = viewKey ? this.views.get(viewKey) : undefined;
     const webContents = view?.webContents;
     if (webContents?.isDestroyed()) {
       return;
     }
 
-    const ids = viewKey ? parseViewKey(viewKey) : { siteId: this.siteId, sessionId: this.sessionId };
+    const tab = viewKey ? this.tabs.get(viewKey) : undefined;
+    const errorUrl = viewKey ? this.failedNavigationUrls.get(viewKey) : undefined;
+    const statusCode = viewKey ? this.failedNavigationStatusCodes.get(viewKey) : undefined;
+    const tabPatch = tab
+      ? {
+        tabId: tab.id,
+        kind: tab.kind,
+        siteId: tab.siteId,
+        sessionId: tab.sessionId,
+        partition: tab.partition,
+        favicon: tab.favicon,
+        url: tab.url,
+        title: errorUrl
+          ? statusCode ? `HTTP ${statusCode}` : "网页无法打开"
+          : this.resolveCanonicalTabTitle(tab),
+      } satisfies Partial<BrowserState>
+      : {};
     const nextState = this.updateViewState(viewKey, view, {
-      siteId: ids.siteId,
-      sessionId: ids.sessionId,
+      ...tabPatch,
       errorText,
     });
     this.window.webContents.send("browser:state-changed", nextState);
-  }
-
-  private emitHomeState() {
-    if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) {
-      return;
-    }
-
-    this.window.webContents.send("browser:state-changed", {
-      ...fallbackBrowserState,
-      title: "起始页",
-    } satisfies BrowserState);
   }
 
   private updateViewState(viewKey: string | undefined, view: WebContentsView | undefined, patch: Partial<BrowserState>) {
@@ -751,55 +1248,112 @@ export class BrowserHost {
     return nextState;
   }
 
+  private async openExternalTarget(target: NavigationTarget & { kind: "external" }, viewKey?: string) {
+    try {
+      await shell.openExternal(target.url);
+      if (viewKey) {
+        this.externalNavigationUrls.set(viewKey, target.url);
+        this.failedNavigationUrls.delete(viewKey);
+        this.failedNavigationStatusCodes.delete(viewKey);
+        this.responseStatusCodes.delete(viewKey);
+      }
+    } catch (error) {
+      await this.loadErrorPage(
+        target.url,
+        `外部协议无法打开：${formatNavigationError(error)}`,
+        viewKey ? this.views.get(viewKey) : undefined,
+        viewKey,
+      );
+    }
+  }
+
+  private emitTabsChanged() {
+    if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) {
+      return;
+    }
+
+    this.window.webContents.send("browser:tabs-changed", this.listTabs());
+  }
+
   private emitMetadataUpdate() {
     if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) {
       return;
     }
 
-    this.window.webContents.send("site:metadata-updated", this.store.listSites());
+    const sites = this.store.listSites();
+    this.syncSiteTabMetadata(sites);
+    this.window.webContents.send("site:metadata-updated", sites);
+    this.emitTabsChanged();
+  }
+
+  private syncSiteTabMetadata(sites = this.store.listSites()) {
+    const sitesById = new Map(sites.map((site) => [site.id, site]));
+    for (const tab of this.tabs.values()) {
+      if (tab.kind !== "site" || !tab.siteId) {
+        continue;
+      }
+
+      const site = sitesById.get(tab.siteId);
+      if (!site) {
+        continue;
+      }
+
+      const favicon = site.faviconPath || site.faviconUrl;
+      tab.favicon = favicon || undefined;
+      tab.updatedAt = now();
+
+      const state = this.viewStates.get(tab.id);
+      if (state) {
+        this.viewStates.set(tab.id, {
+          ...state,
+          favicon: tab.favicon,
+        });
+      }
+    }
   }
 
   private getActiveView() {
     const view = this.getActiveViewOrUndefined();
     if (!view) {
-      throw new Error("浏览器会话未打开");
+      throw new Error("浏览器标签未打开");
     }
 
     return view;
   }
 
   private getActiveViewOrUndefined() {
-    if (!this.siteId || !this.sessionId) {
-      return undefined;
+    return this.activeTabId ? this.views.get(this.activeTabId) : undefined;
+  }
+
+  private requireActiveTab() {
+    const tab = this.requireActiveTabOrUndefined();
+    if (!tab) {
+      throw new Error("浏览器标签未打开");
     }
 
-    return this.views.get(createViewKey(this.siteId, this.sessionId));
+    return tab;
   }
 
-  private getActiveViewKey() {
-    if (!this.siteId || !this.sessionId) {
-      return undefined;
+  private requireActiveTabOrUndefined() {
+    return this.activeTabId ? this.tabs.get(this.activeTabId) : undefined;
+  }
+
+  private requireTab(tabId: string) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) {
+      throw new Error("标签不存在");
     }
 
-    return createViewKey(this.siteId, this.sessionId);
+    return tab;
   }
 
-  private activateView(siteId: string, sessionId: string) {
-    const activeKey = createViewKey(siteId, sessionId);
-    this.viewRegistry.activate(activeKey);
-  }
-
-  private activateViewIfCurrent(viewKey: string) {
-    if (this.getActiveViewKey() !== viewKey) {
-      return;
+  private requireActiveSiteSession() {
+    const tab = this.requireActiveTab();
+    if (!tab.siteId || !tab.sessionId) {
+      throw new Error("当前标签不是站点会话");
     }
 
-    const ids = parseViewKey(viewKey);
-    this.activateView(ids.siteId, ids.sessionId);
-  }
-
-  private isLatestOpenForCurrentView(openRequestId: number, viewKey: string) {
-    return this.openRequestSeq === openRequestId && this.getActiveViewKey() === viewKey;
+    return { siteId: tab.siteId, sessionId: tab.sessionId };
   }
 
   private destroyView(viewKey: string, view: WebContentsView) {
@@ -811,12 +1365,7 @@ export class BrowserHost {
         view.webContents.close();
       }
     } catch {
-      // Electron may already be tearing down the embedded page during app shutdown.
-    }
-
-    if (viewKey === createViewKey(this.siteId ?? "", this.sessionId ?? "")) {
-      this.siteId = undefined;
-      this.sessionId = undefined;
+      // Electron 退出时嵌入页可能已被销毁。
     }
   }
 
@@ -832,6 +1381,19 @@ export class BrowserHost {
     this.viewRegistry.unmountActiveView();
   }
 }
+
+function titleForInternalPage(pageId: BrowserInternalPageId) {
+  return {
+    newtab: "新标签页",
+    downloads: "下载记录",
+    settings: "设置",
+    extensions: "扩展程序管理",
+    "jarvis-script": "jarvis-script",
+    history: "历史记录",
+    "clear-browsing-data": "删除浏览数据",
+  }[pageId];
+}
+
 
 function toElectronCookieSetDetails(details: CookieSetDetails): Electron.CookiesSetDetails {
   return {

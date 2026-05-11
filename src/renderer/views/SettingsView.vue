@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { Download, FolderOpen } from '@icon-park/vue-next';
+import { Code, Download, FolderOpen, History, Plug, VacuumCleaner } from '@icon-park/vue-next';
 import { ElButton, ElInput, ElMessage, ElSwitch } from 'element-plus';
 import { computed, onMounted } from 'vue';
+import type { BrowserInternalPageId } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
 
 const browser = useBrowserStore();
 
 const settings = computed(() => browser.downloadSettings);
+const navItems: Array<{ pageId: BrowserInternalPageId; label: string; icon: typeof Download }> = [
+  { pageId: 'settings', label: '下载内容', icon: Download },
+  { pageId: 'downloads', label: '下载记录', icon: Download },
+  { pageId: 'history', label: '历史记录', icon: History },
+  { pageId: 'clear-browsing-data', label: '删除浏览数据', icon: VacuumCleaner },
+  { pageId: 'extensions', label: '扩展程序管理', icon: Plug },
+  { pageId: 'jarvis-script', label: 'jarvis-script', icon: Code },
+];
 
 onMounted(async () => {
   await browser.loadSettings();
@@ -15,6 +24,14 @@ onMounted(async () => {
 async function selectDownloadPath() {
   try {
     await browser.selectDownloadPath();
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+async function openInternalPage(pageId: BrowserInternalPageId) {
+  try {
+    await browser.activateInternalPage(pageId);
   } catch (error) {
     ElMessage.error(formatError(error));
   }
@@ -39,9 +56,16 @@ function formatError(error: unknown) {
   <main class="settings-page">
     <section class="settings-page__body">
       <aside class="settings-nav">
-        <button class="settings-nav__item settings-nav__item--active" type="button">
-          <Download theme="outline" size="18" />
-          <span>下载内容</span>
+        <button
+          v-for="item in navItems"
+          :key="item.pageId"
+          class="settings-nav__item"
+          :class="{ 'settings-nav__item--active': item.pageId === 'settings' }"
+          type="button"
+          @click="openInternalPage(item.pageId)"
+        >
+          <component :is="item.icon" theme="outline" size="18" />
+          <span>{{ item.label }}</span>
         </button>
       </aside>
 

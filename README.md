@@ -28,7 +28,7 @@
 
 **Jarvis Browser** 是一个围绕“站点”和“会话”组织的桌面浏览器。它不是把所有登录态塞进同一个浏览器上下文，而是让每个站点拥有多个彼此隔离的会话，用独立的 Electron Session 保存 Cookie、LocalStorage、IndexedDB、Cache 和 Service Worker 数据。
 
-它适合长期维护多个账号、站点插件和 Jarvis Script 的工作流：打开一个站点，先选择要使用的会话，浏览器会恢复对应的网页状态，并把脚本、扩展、favicon、标题、下载记录等工作台数据归档到本地。
+它适合长期维护多个账号、站点扩展程序和 Jarvis Script 的工作流：打开一个站点，先选择要使用的会话，浏览器会恢复对应的网页状态，并把脚本、扩展、favicon、标题、下载记录等工作台数据归档到本地。
 
 > One site. Many sessions. Clean boundaries.
 
@@ -59,20 +59,20 @@
 - **页面监控链路**：主进程 monitor 位于 WebContentsView 顶层，向脚本提供页面事件和页面 HTML。
 - **站点元数据采集**：脚本基于当前页面 HTML 解析 title、favicon 等信息。
 - **favicon 生命周期保护**：站点图标只在站点尚无图标时首次采集，后续跳转不会把外部站点图标写回当前站点。
-- **面板互斥**：脚本、插件、会话和标签选择面板统一开关状态。
+- **面板互斥**：脚本、扩展程序、会话和标签选择面板统一开关状态。
 
 ### Extension Runtime
 
 - **Chrome 扩展目录安装**：支持安装已解压的扩展目录。
-- **全局插件**：打开任意站点会话时加载。
-- **站点插件**：只作用于指定站点的会话。
+- **全局扩展程序**：打开任意站点会话时加载。
+- **站点扩展程序**：只作用于指定站点的会话。
 - **生命周期管理**：支持安装、启用、停用、卸载和加载错误展示。
 - **Chrome 风格 popup**：带 `action.default_popup` 的扩展会在工具栏显示 action 图标，点击后由主进程创建独立 `BrowserWindow` 浮层承载真实 `chrome-extension://...` 页面。
 - **登录态迁移桥接**：Jarvis 扩展 popup 可通过专用 preload 调用当前会话的 Electron `session.cookies`，用于补齐 Electron 扩展运行时缺失的 `chrome.cookies` 写入能力。
 
 ### Local Data
 
-- **本地持久化**：站点、会话、插件、下载和 favicon 元数据按目录保存。
+- **本地持久化**：站点、会话、扩展程序、下载和 favicon 元数据按目录保存。
 - **favicon 缓存**：站点图标会写入本地缓存，起始页优先使用本地资源。
 - **下载管理**：下载记录、下载位置和“每次下载前询问保存位置”配置持久保存。
 - **单实例运行**：应用全局只允许启动一个 Jarvis Browser 进程。
@@ -120,19 +120,22 @@ jarvis-browser/
 │   │   ├── browser-host/          # WebContentsView 生命周期、导航、状态同步
 │   │   ├── browser-host/monitor/  # 顶层页面监控事件
 │   │   ├── jarvis-script/         # Jarvis Script 管理与运行时
-│   │   ├── extension-runtime.ts   # 全局插件和站点插件运行时
-│   │   ├── popup-window-manager.ts # 主进程浮层窗口，承载扩展 action popup
+│   │   ├── extension-runtime.ts   # 全局扩展程序和站点扩展程序运行时
+│   │   ├── browser-overlay-host.ts # 主进程浮层宿主，承载扩展 action popup
+│   │   ├── internal-protocol.ts   # jarvis-browser:// 内部页面协议
 │   │   ├── favicon-cache.ts       # favicon 本地缓存
-│   │   ├── store.ts               # 站点、会话、插件、下载元数据
+│   │   ├── store.ts               # 站点、会话、扩展程序、下载元数据
+│   │   ├── history-manager.ts     # 浏览历史
+│   │   ├── storage-manager.ts     # 存储统计与清理
 │   │   └── main.ts                # Electron 主进程入口
 │   │
 │   ├── preload/
-│   │   ├── preload.ts                 # Renderer IPC 桥
-│   │   ├── extension-popup-preload.ts # 扩展 popup IPC 桥
-│   │   └── error-page-preload.ts      # 内置错误页 IPC 桥
+│   │   ├── preload.ts                 # Browser shell IPC 桥
+│   │   ├── web-page-preload.ts        # WebContentsView 页面桥
+│   │   └── extension-popup-preload.ts # 扩展 popup IPC 桥
 │   │
 │   ├── renderer/
-│   │   ├── components/            # 抽屉、插件管理、脚本管理、会话管理
+│   │   ├── components/            # 抽屉、扩展程序管理、脚本管理、会话管理
 │   │   ├── stores/                # Pinia browser store
 │   │   ├── views/                 # 起始页、浏览器页、下载页、设置页
 │   │   ├── public/                # Renderer 静态资源
@@ -154,7 +157,7 @@ jarvis-browser/
 
 ## Data Layout
 
-Jarvis Browser 的业务数据保存在本机用户数据目录下。每个站点有自己的元数据、favicon、插件和会话目录；每个会话再拥有独立的 Electron Session 数据。
+Jarvis Browser 的业务数据保存在本机用户数据目录下。每个站点有自己的元数据、favicon、扩展程序和会话目录；每个会话再拥有独立的 Electron Session 数据。
 
 ```text
 ~/jarvis-browser/default/

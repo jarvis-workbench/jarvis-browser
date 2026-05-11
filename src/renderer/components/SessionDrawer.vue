@@ -369,7 +369,7 @@ function siteInitial(site: Site) {
         <span>危险操作</span>
       </div>
       <div class="site-danger-zone__box">
-        <span>删除站点会移除该站点下的会话数据和站点插件。</span>
+        <span>删除站点会移除该站点下的会话数据和站点扩展程序。</span>
         <button v-if="!pendingDeleteSite" class="site-danger-zone__delete" type="button" @click="beginDeleteSiteConfirm">
           <Delete theme="outline" size="16" />
           删除站点

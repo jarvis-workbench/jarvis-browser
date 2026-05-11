@@ -27,7 +27,7 @@ export interface JarvisScriptWorkerApi {
   updateSiteTitle(title: string): Promise<void>;
   updateSiteFavicon(input: { faviconUrl?: string; faviconPath?: string }): Promise<void>;
   sendMessage(channel: string, payload: unknown): void;
-  sendPluginMessage(input: { channel: string; payload: unknown; siteId?: string; sessionId?: string }): void;
+  sendBrowserTabMessage(input: { channel: string; payload: unknown; siteId?: string; sessionId?: string }): void;
 }
 
 const data = workerData as WorkerData;
@@ -62,8 +62,8 @@ const api: JarvisScriptWorkerApi = {
   sendMessage: (channel, payload) => {
     void rpc("renderer:message", { channel, payload });
   },
-  sendPluginMessage: (input) => {
-    void rpc("chrome-plugin:message", input);
+  sendBrowserTabMessage: (input) => {
+    void rpc("browser-tab:message", input);
   },
 };
 

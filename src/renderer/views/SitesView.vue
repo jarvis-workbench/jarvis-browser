@@ -121,7 +121,7 @@ function toImageSrc(value?: string) {
     return '';
   }
 
-  if (/^(https?:|file:|data:|jarvis-asset:)/i.test(value)) {
+  if (/^(https?:|file:|data:|jarvis-browser:)/i.test(value)) {
     return value;
   }
 
@@ -185,7 +185,7 @@ function formatError(error: unknown) {
             </span>
             <span class="site-card__meta">
               <span>{{ site.sessions.length }} 个会话</span>
-              <span>{{ site.extensions.length }} 个站点插件</span>
+              <span>{{ site.extensions.length }} 个站点扩展程序</span>
             </span>
           </button>
 
