@@ -41,12 +41,11 @@ import {
   type BrowserOverlayMenuModel,
 } from "../browser-overlay-menu";
 import { MetadataStore, normalizeHttpUrl } from "../store";
-import { createTabViewKey, parseViewKey } from "./keys";
 import { ViewLifecycle } from "./lifecycle";
 import { JarvisMonitorController } from "./monitor/controller";
 import { formatNavigationError, isBrowserDevToolsShortcut, isBrowserReloadShortcut, isNavigationAbort } from "./navigation";
 import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
-import { createBrowserState, fallbackBrowserState } from "./state";
+import { createBrowserState} from "./state";
 import { ViewRegistry } from "./view-registry";
 
 const now = () => new Date().toISOString();
@@ -308,7 +307,14 @@ export class BrowserHost {
     }
   }
 
-  reload() {
+  async reload() {
+    const tab = this.requireActiveTab();
+    const targetUrl = this.failedNavigationUrls.get(tab.id);
+    if (targetUrl) {
+      await this.reloadFailedNavigation(tab.id, targetUrl, this.getActiveView());
+      return;
+    }
+
     this.getActiveView().webContents.reload();
   }
 
@@ -343,13 +349,18 @@ export class BrowserHost {
     const tab = this.requireActiveTab();
     const targetUrl = this.failedNavigationUrls.get(tab.id);
     if (!targetUrl) {
-      this.reload();
+      await this.reload();
       return;
     }
 
-    this.failedNavigationStatusCodes.delete(tab.id);
-    this.responseStatusCodes.delete(tab.id);
-    await this.loadUrlSafely(targetUrl, this.getActiveView(), tab.id);
+    await this.reloadFailedNavigation(tab.id, targetUrl, this.getActiveView());
+  }
+
+  private async reloadFailedNavigation(tabId: string, targetUrl: string, view: WebContentsView) {
+    this.failedNavigationUrls.delete(tabId);
+    this.failedNavigationStatusCodes.delete(tabId);
+    this.responseStatusCodes.delete(tabId);
+    await this.loadUrlSafely(targetUrl, view, tabId);
   }
 
   stop() {
@@ -728,11 +739,9 @@ export class BrowserHost {
 
   handleBrowserShortcut(input: Electron.Input) {
     if (isBrowserReloadShortcut(input)) {
-      try {
-        this.reload();
-      } catch {
+      void this.reload().catch(() => {
         // 没有激活标签时忽略浏览器刷新快捷键。
-      }
+      });
       return true;
     }
 

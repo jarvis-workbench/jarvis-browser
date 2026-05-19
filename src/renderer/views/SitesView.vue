@@ -23,6 +23,16 @@ const frequentSites = computed(() => browser.sites.slice(0, 10));
 const sessionPickerSite = computed(() => {
   return browser.sites.find((site) => site.id === sessionPickerSiteId.value) ?? null;
 });
+const sessionPickerSessions = computed(() => {
+  const site = sessionPickerSite.value;
+  if (!site) {
+    return [];
+  }
+
+  return [...site.sessions].sort((left, right) => {
+    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  });
+});
 
 function openAddDrawer(resetUrl = false) {
   if (resetUrl) {
@@ -236,9 +246,9 @@ function formatError(error: unknown) {
             </button>
           </header>
 
-          <div v-if="sessionPickerSite.sessions.length" class="session-picker__list">
+          <div v-if="sessionPickerSessions.length" class="session-picker__list">
             <button
-              v-for="session in sessionPickerSite.sessions"
+              v-for="session in sessionPickerSessions"
               :key="session.id"
               class="session-picker__item"
               type="button"
@@ -308,8 +318,11 @@ function formatError(error: unknown) {
 }
 
 .session-picker {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   width: min(420px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
   gap: 14px;
   border: 1px solid rgba(213, 221, 239, 0.9);
   border-radius: 12px;
@@ -389,6 +402,9 @@ function formatError(error: unknown) {
 
 .session-picker__list {
   display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   gap: 8px;
 }
 
