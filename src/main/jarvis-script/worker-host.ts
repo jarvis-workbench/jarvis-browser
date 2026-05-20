@@ -42,12 +42,10 @@ const api: JarvisScriptWorkerApi = {
   log: (message) => parentPort?.postMessage({ type: "jarvis-script:log", message }),
   request: async (input, init) => {
     assertPermission("http");
-    const response = await fetch(input, init);
-    const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      return response.json();
-    }
-    return response.text();
+    return rpc("http:request", {
+      input: input.toString(),
+      init: serializeRequestInit(init),
+    });
   },
   openWebSocket: (url) => {
     assertPermission("ws");
@@ -124,6 +122,26 @@ function assertPermission(permission: string) {
   }
 
   throw new Error(`${data.script.name} 缺少权限：${permission}`);
+}
+
+function serializeRequestInit(init?: RequestInit) {
+  if (!init) {
+    return undefined;
+  }
+
+  return {
+    method: init.method,
+    headers: serializeHeaders(init.headers),
+    body: typeof init.body === "string" ? init.body : undefined,
+  };
+}
+
+function serializeHeaders(headers?: HeadersInit) {
+  if (!headers) {
+    return undefined;
+  }
+
+  return Object.fromEntries(new Headers(headers).entries());
 }
 
 async function loadScriptModule() {

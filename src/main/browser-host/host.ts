@@ -100,6 +100,7 @@ export class BrowserHost {
       emitMetadataUpdate: () => this.emitMetadataUpdate(),
       emitBrowserState: (viewKey, errorText) => this.emitBrowserState(viewKey, errorText),
       isPageSuccessful: (viewKey, pageUrl) => this.isPageSuccessful(viewKey, pageUrl),
+      resolveRequestContext: (input) => this.resolveJarvisScriptRequestContext(input),
       sendMessageToWebContents: (input) => this.sendJarvisScriptMessageToWebContents(input),
     });
     this.jarvisScriptManager = new JarvisScriptManager(window, store, this.jarvisScriptRuntime);
@@ -1498,6 +1499,34 @@ export class BrowserHost {
     }
 
     return { siteId: tab.siteId, sessionId: tab.sessionId };
+  }
+
+  private resolveJarvisScriptRequestContext(input: { siteId?: string; sessionId?: string }) {
+    const activeTab = this.requireActiveTabOrUndefined();
+    const tab = input.siteId
+      ? [...this.tabs.values()].find((candidate) =>
+        candidate.siteId === input.siteId
+        && (!input.sessionId || candidate.sessionId === input.sessionId),
+      )
+      : activeTab;
+    const view = tab ? this.views.get(tab.id) : undefined;
+    if (view && !view.webContents.isDestroyed()) {
+      return {
+        session: view.webContents.session,
+        userAgent: view.webContents.getUserAgent(),
+      };
+    }
+
+    if (tab?.siteId && tab.sessionId) {
+      return {
+        session: getElectronSession(tab.siteId, tab.sessionId),
+      };
+    }
+
+    return {
+      session: getDefaultProfileSession(),
+      userAgent: this.window.webContents.getUserAgent(),
+    };
   }
 
   private destroyView(viewKey: string, view: WebContentsView) {

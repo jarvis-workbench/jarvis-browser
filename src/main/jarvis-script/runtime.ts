@@ -21,12 +21,18 @@ interface RuntimeOptions {
   emitMetadataUpdate: () => void;
   emitBrowserState: (viewKey?: string, errorText?: string) => void;
   isPageSuccessful: (viewKey: string, pageUrl: string) => boolean;
+  resolveRequestContext: (input: { siteId?: string; sessionId?: string }) => JarvisScriptRequestContext;
   sendMessageToWebContents: (input: {
     siteId?: string;
     sessionId?: string;
     channel: string;
     payload: unknown;
   }) => Promise<void>;
+}
+
+interface JarvisScriptRequestContext {
+  session: Electron.Session;
+  userAgent?: string;
 }
 
 export class JarvisScriptRuntime {
@@ -332,6 +338,11 @@ export class JarvisScriptRuntime {
   }
 
   private async runRpc(script: JarvisScript, message: WorkerRpcMessage) {
+    if (message.method === "http:request") {
+      this.assertPermission(script, "http");
+      return this.handleHttpRequest(script, message.payload);
+    }
+
     if (message.method === "site:update-title") {
       this.assertPermission(script, "site:title");
       const siteId = this.resolveTargetSiteId(script, message.payload);
@@ -375,6 +386,43 @@ export class JarvisScriptRuntime {
     }
 
     throw new Error(`不支持的 Jarvis Script RPC：${message.method}`);
+  }
+
+  private async handleHttpRequest(script: JarvisScript, payload?: Record<string, unknown>) {
+    const input = typeof payload?.input === "string" ? payload.input : undefined;
+    if (!input) {
+      throw new Error("Jarvis Script HTTP 请求缺少 URL");
+    }
+
+    const requestUrl = new URL(input).toString();
+    const requestInit = parseRequestInit(payload?.init);
+    const context = this.options.resolveRequestContext({
+      siteId: typeof payload?.siteId === "string" ? payload.siteId : script.siteId,
+      sessionId: typeof payload?.sessionId === "string" ? payload.sessionId : undefined,
+    });
+    const headers = new Headers(requestInit.headers);
+    if (context.userAgent && !headers.has("user-agent")) {
+      headers.set("user-agent", context.userAgent);
+    }
+
+    if (!headers.has("cookie")) {
+      const cookies = await context.session.cookies.get({ url: requestUrl });
+      const cookieHeader = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+      if (cookieHeader) {
+        headers.set("cookie", cookieHeader);
+      }
+    }
+
+    const response = await context.session.fetch(requestUrl, {
+      ...requestInit,
+      headers,
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return response.json();
+    }
+
+    return response.text();
   }
 
   private assertPermission(script: JarvisScript, permission: string) {
@@ -468,6 +516,30 @@ function isWorkerRpcMessage(message: WorkerMessage): message is WorkerRpcMessage
     && typeof message.rpcId === "string"
     && typeof message.workerId === "string"
     && typeof message.method === "string";
+}
+
+function parseRequestInit(value: unknown): RequestInit {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const input = value as {
+    method?: unknown;
+    headers?: unknown;
+    body?: unknown;
+  };
+  const init: RequestInit = {};
+  if (typeof input.method === "string") {
+    init.method = input.method;
+  }
+  if (input.headers && typeof input.headers === "object") {
+    init.headers = input.headers as Record<string, string>;
+  }
+  if (typeof input.body === "string") {
+    init.body = input.body;
+  }
+
+  return init;
 }
 
 class UserJarvisMonitorScript implements JarvisMonitorScript {
