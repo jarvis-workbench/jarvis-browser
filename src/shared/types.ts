@@ -299,6 +299,128 @@ export interface StorageClearDataResult {
   cacheCleared: boolean;
 }
 
+export type SessionSyncScope = "global" | "site";
+
+export type SessionSyncConflictAction = "skip" | "overwrite" | "overwrite-all";
+
+export type SessionSyncConflictKind = "none" | "site-host" | "session-name";
+
+export interface SessionSyncSelection {
+  siteId: string;
+  sessionId: string;
+}
+
+export interface OpenSessionSyncDialogInput {
+  scope: SessionSyncScope;
+  siteId?: string;
+}
+
+export interface SessionSyncExportInput {
+  scope?: SessionSyncScope;
+  siteId?: string;
+  siteIds?: string[];
+  sessionIds?: string[];
+  sessions?: SessionSyncSelection[];
+  encrypted: boolean;
+  password?: string;
+}
+
+export interface SessionSyncExportResult {
+  canceled: boolean;
+  filePath?: string;
+  exportedSites: number;
+  exportedSessions: number;
+  exportedSiteCount?: number;
+  exportedSessionCount?: number;
+}
+
+export interface SessionSyncPreviewImportInput {
+  scope: SessionSyncScope;
+  siteId?: string;
+  password?: string;
+}
+
+export interface SessionSyncPreviewSession {
+  id: string;
+  sourceSiteId: string;
+  sourceSessionId: string;
+  name: string;
+  siteId?: string;
+  lastUrl: string;
+  duplicate?: boolean;
+  existingSessionId?: string;
+  targetSiteId?: string;
+  targetSessionId?: string;
+  conflict: SessionSyncConflictKind;
+  hasPartition: boolean;
+  hasWebState: boolean;
+  importable: boolean;
+  skippedReason?: string;
+}
+
+export interface SessionSyncPreviewSite {
+  id: string;
+  sourceSiteId: string;
+  title: string;
+  url: string;
+  host: string;
+  duplicate?: boolean;
+  existingSiteId?: string;
+  targetSiteId?: string;
+  conflict: SessionSyncConflictKind;
+  importable: boolean;
+  skippedReason?: string;
+  sessions: SessionSyncPreviewSession[];
+}
+
+export interface SessionSyncPreviewImportResult {
+  canceled: boolean;
+  importId?: string;
+  filePath?: string;
+  fileName?: string;
+  encrypted: boolean;
+  sites: SessionSyncPreviewSite[];
+  duplicateSiteCount: number;
+  duplicateSessionCount: number;
+  summary: {
+    totalSites: number;
+    importableSites: number;
+    totalSessions: number;
+    importableSessions: number;
+  };
+}
+
+export interface SessionSyncApplyImportInput {
+  importId: string;
+  scope?: SessionSyncScope;
+  siteId?: string;
+  siteConflictAction?: SessionSyncConflictAction;
+  sessionConflictAction?: SessionSyncConflictAction;
+  siteConflicts?: Record<string, SessionSyncConflictAction>;
+  sessionConflicts?: Record<string, SessionSyncConflictAction>;
+}
+
+export interface SessionSyncApplyImportResult {
+  importedSites: number;
+  updatedSites: number;
+  importedSessions: number;
+  overwrittenSessions: number;
+  skippedSessions: Array<{
+    sourceSiteId: string;
+    sourceSessionId: string;
+    reason: string;
+  }>;
+  unsupportedSessions: Array<{
+    sourceSiteId: string;
+    sourceSessionId: string;
+    reason: string;
+  }>;
+  importedSiteCount?: number;
+  importedSessionCount?: number;
+  skippedSiteCount?: number;
+  skippedSessionCount?: number;
+}
+
 export interface BrowserDebugState {
   activeTabId?: string;
   viewCount: number;
@@ -405,6 +527,12 @@ export interface AppApi {
     stats(input?: StorageStatsInput): Promise<StoragePartitionStats[]>;
     clearData(input: StorageClearDataInput): Promise<StorageClearDataResult>;
   };
+  sessionSync: {
+    export(input: SessionSyncExportInput): Promise<SessionSyncExportResult>;
+    previewImport(input: SessionSyncPreviewImportInput): Promise<SessionSyncPreviewImportResult>;
+    applyImport(input: SessionSyncApplyImportInput): Promise<SessionSyncApplyImportResult>;
+    cancelImport(importId: string): Promise<void>;
+  };
   settings: {
     get(): Promise<DownloadSettings>;
     update(input: Partial<DownloadSettings>): Promise<DownloadSettings>;
@@ -418,4 +546,5 @@ export interface AppApi {
   onExtensionUpdated(callback: (siteId: string, extensions: SiteExtension[]) => void): () => void;
   onJarvisScriptUpdated(callback: (siteId: string | undefined, scripts: JarvisScript[]) => void): () => void;
   onJarvisScriptMessage(callback: (message: JarvisScriptMessage) => void): () => void;
+  onOpenSessionSyncDialog(callback: (input: OpenSessionSyncDialogInput) => void): () => void;
 }

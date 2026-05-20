@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, nextTick, ref } from 'vue';
-import type { BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, Site, SiteExtension, SiteSession } from '../../shared/types';
+import type { BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, OpenSessionSyncDialogInput, SessionSyncApplyImportInput, SessionSyncExportInput, SessionSyncPreviewImportInput, Site, SiteExtension, SiteSession } from '../../shared/types';
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
 import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
@@ -16,12 +16,21 @@ const fallbackBrowserState: BrowserState = {
 export const useBrowserStore = defineStore('browser', () => {
   const sites = ref<Site[]>([]);
   const browserState = ref<BrowserState>({ ...fallbackBrowserState });
-  const tabStates = ref<Record<string, BrowserState>>({});
   const address = ref('');
   const loading = ref(false);
   const statusMessage = ref('准备就绪');
   const downloads = ref<DownloadState[]>([]);
   const downloadSettings = ref<DownloadSettings | null>(null);
+  const lastDownloadUpdatedAt = ref(0);
+  const recentDownloadCount = ref(0);
+  const sessionSyncDialog = ref<OpenSessionSyncDialogInput & { visible: boolean }>({
+    visible: false,
+    scope: 'global',
+  });
+  const sessionSyncHadEmbeddedView = ref(false);
+  const lastBrowserBounds = ref<BrowserRect | null>(null);
+  let pendingBounds: { element: HTMLElement; insetLeft: number; insetRight: number } | undefined;
+  let boundsFrame: number | undefined;
 
   const tabs = useBrowserTabs(sites);
   const selectedSite = tabs.selectedSite;
@@ -75,7 +84,6 @@ export const useBrowserStore = defineStore('browser', () => {
   async function deleteSite(site: Site) {
     await window.appApi.sites.delete(site.id);
     sites.value = sites.value.filter((item) => item.id !== site.id);
-    await syncTabs();
     statusMessage.value = '站点已移除';
   }
 
@@ -96,8 +104,6 @@ export const useBrowserStore = defineStore('browser', () => {
       statusMessage.value = '站点不存在';
       return;
     }
-
-    await extensions.loadExtensions(site.id);
 
     const session = site.sessions.find((item) => item.id === sessionId) ?? site.sessions[0] ?? null;
     if (session) {
@@ -135,20 +141,19 @@ export const useBrowserStore = defineStore('browser', () => {
   }
 
   async function openSession(site: Site, session: SiteSession) {
-    await extensions.loadExtensions(site.id);
     const tab = await window.appApi.browser.createSiteTab({ siteId: site.id, sessionId: session.id });
     address.value = tab.url || site.url;
-    await syncTabs();
     statusMessage.value = `${session.name} 已打开`;
   }
 
   async function closeSessionTab(site: Site, session: SiteSession) {
-    const tab = tabs.openTabs.value.find((item) => item.siteId === site.id && item.sessionId === session.id);
-    await window.appApi.browser.closeTab(tab?.id ?? `${site.id}:${session.id}`);
-    if (tab) {
-      delete tabStates.value[tab.id];
+    const tab = tabs.findSessionTab(site.id, session.id);
+    if (!tab) {
+      return;
     }
-    await syncTabs();
+
+    await window.appApi.browser.closeTab(tab.id);
+    tabs.removeTabState(tab.id);
   }
 
   async function activateHome() {
@@ -166,15 +171,14 @@ export const useBrowserStore = defineStore('browser', () => {
     } else {
       statusMessage.value = internalPageStatus(pageId);
     }
-    await syncTabs();
   }
 
   async function closeInternalPage(pageId: InternalPageTabId) {
     const tab = tabs.openTabs.value.find((item) => item.kind === 'internal' && item.internalPageId === pageId);
     if (tab) {
       await window.appApi.browser.closeTab(tab.id);
+      tabs.removeTabState(tab.id);
     }
-    await syncTabs();
   }
 
   async function showHome() {
@@ -184,7 +188,6 @@ export const useBrowserStore = defineStore('browser', () => {
     address.value = '';
     browserState.value = { ...fallbackBrowserState, title: '起始页' };
     statusMessage.value = '起始页';
-    await syncTabs();
   }
 
   async function activateOpenTab(tab: BrowserTab | { site: Site; session: SiteSession }) {
@@ -194,7 +197,6 @@ export const useBrowserStore = defineStore('browser', () => {
     }
 
     await window.appApi.browser.activateTab(tab.id);
-    await syncTabs();
   }
 
   async function openSessionFromCurrentSite(session: SiteSession) {
@@ -241,7 +243,7 @@ export const useBrowserStore = defineStore('browser', () => {
     }
 
     await window.appApi.sessions.delete(site.id, session.id);
-    delete tabStates.value[session.id];
+    tabs.removeSessionTabStates(site.id, session.id);
     const remaining = site.sessions.filter((item) => item.id !== session.id);
     patchSite(site.id, { sessions: remaining });
 
@@ -254,7 +256,6 @@ export const useBrowserStore = defineStore('browser', () => {
         await showHome();
       }
     }
-    await syncTabs();
     statusMessage.value = '会话已移除';
   }
 
@@ -355,11 +356,83 @@ export const useBrowserStore = defineStore('browser', () => {
     return updateDownloadSettings({ downloadPath });
   }
 
+  async function openSessionSyncDialog(input: OpenSessionSyncDialogInput) {
+    sessionSyncHadEmbeddedView.value = tabs.selectedTab.value?.kind === 'site';
+    if (sessionSyncHadEmbeddedView.value) {
+      await hideEmbeddedView();
+    }
+    sessionSyncDialog.value = {
+      visible: true,
+      scope: input.scope,
+      siteId: input.siteId,
+    };
+  }
+
+  async function closeSessionSyncDialog() {
+    sessionSyncDialog.value = {
+      ...sessionSyncDialog.value,
+      visible: false,
+    };
+    if (sessionSyncHadEmbeddedView.value) {
+      sessionSyncHadEmbeddedView.value = false;
+      await showActiveView();
+    }
+  }
+
+  async function exportSessionSync(input: SessionSyncExportInput) {
+    return window.appApi.sessionSync.export(input);
+  }
+
+  async function previewSessionSyncImport(input: SessionSyncPreviewImportInput) {
+    return window.appApi.sessionSync.previewImport(input);
+  }
+
+  async function applySessionSyncImport(input: SessionSyncApplyImportInput) {
+    const result = await window.appApi.sessionSync.applyImport(input);
+    await loadSites();
+    statusMessage.value = '登录状态已导入';
+    return result;
+  }
+
+  async function cancelSessionSyncImport(importId: string) {
+    await window.appApi.sessionSync.cancelImport(importId);
+  }
+
   async function setBrowserBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
     if (!element || !tabs.selectedTab.value) {
       return;
     }
 
+    const bounds = resolveBrowserBounds(element, insetLeft, insetRight);
+    if (sameBounds(lastBrowserBounds.value, bounds)) {
+      return;
+    }
+
+    lastBrowserBounds.value = bounds;
+    await window.appApi.browser.setBounds(bounds);
+  }
+
+  function scheduleBrowserBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
+    if (!element) {
+      return;
+    }
+
+    pendingBounds = { element, insetLeft, insetRight };
+    if (boundsFrame !== undefined) {
+      return;
+    }
+
+    boundsFrame = requestAnimationFrame(() => {
+      boundsFrame = undefined;
+      const nextBounds = pendingBounds;
+      pendingBounds = undefined;
+      if (nextBounds) {
+        void setBrowserBounds(nextBounds.element, nextBounds.insetLeft, nextBounds.insetRight);
+      }
+    });
+  }
+
+  function resolveBrowserBounds(element: HTMLElement, insetLeft = 0, insetRight = 0) {
     const rect = element.getBoundingClientRect();
     const viewportWidth = Math.round(rect.width);
     const minWidth = 320;
@@ -368,12 +441,12 @@ export const useBrowserStore = defineStore('browser', () => {
       0,
       Math.min(Math.round(insetRight), Math.max(0, viewportWidth - safeInsetLeft - minWidth)),
     );
-    await window.appApi.browser.setBounds({
+    return {
       x: Math.round(rect.left) + safeInsetLeft,
       y: Math.round(rect.top),
       width: viewportWidth - safeInsetLeft - safeInsetRight,
       height: Math.round(rect.height),
-    });
+    } satisfies BrowserRect;
   }
 
   function closeSite() {
@@ -381,19 +454,14 @@ export const useBrowserStore = defineStore('browser', () => {
     tabs.resetTabs();
     extensions.clearSiteExtensions();
     scripts.clearSiteScripts();
-    tabStates.value = {};
+    lastBrowserBounds.value = null;
     address.value = '';
     browserState.value = { ...fallbackBrowserState };
   }
 
   function bindEvents() {
     const removeBrowserListener = window.appApi.onBrowserStateChanged((state) => {
-      if (state.tabId) {
-        tabStates.value = {
-          ...tabStates.value,
-          [state.tabId]: state,
-        };
-      }
+      tabs.setTabState(state);
 
       if (isActiveBrowserState(state)) {
         browserState.value = state;
@@ -421,6 +489,8 @@ export const useBrowserStore = defineStore('browser', () => {
     });
     const removeDownloadListener = window.appApi.onDownloadUpdated((download) => {
       patchDownload(download);
+      lastDownloadUpdatedAt.value = Date.now();
+      recentDownloadCount.value = downloads.value.filter((item) => item.state === 'progressing').length || 1;
       if (download.state === 'progressing') {
         statusMessage.value = download.paused ? `下载已暂停：${download.filename}` : `正在下载：${download.filename}`;
       } else if (download.state === 'completed') {
@@ -434,6 +504,9 @@ export const useBrowserStore = defineStore('browser', () => {
     const removeTabsListener = window.appApi.onBrowserTabsChanged((state) => {
       tabs.syncTabs(state);
     });
+    const removeSessionSyncListener = window.appApi.onOpenSessionSyncDialog((input) => {
+      void openSessionSyncDialog(input);
+    });
     void syncTabs();
 
     return () => {
@@ -444,6 +517,7 @@ export const useBrowserStore = defineStore('browser', () => {
       removeScriptUpdateListener();
       removeScriptMessageListener();
       removeDownloadListener();
+      removeSessionSyncListener();
     };
   }
 
@@ -469,22 +543,34 @@ export const useBrowserStore = defineStore('browser', () => {
     ];
   }
 
-  async function refreshBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
-    await nextTick();
-    await setBrowserBounds(element, insetLeft, insetRight);
+  function acknowledgeDownloads() {
+    recentDownloadCount.value = 0;
   }
 
-  function getTabState(sessionId: string) {
-    const tab = tabs.openTabs.value.find((item) => item.sessionId === sessionId);
-    return tab ? tabStates.value[tab.id] : undefined;
+  async function refreshBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
+    await nextTick();
+    scheduleBrowserBounds(element, insetLeft, insetRight);
+  }
+
+  function getTabState(tabId: string) {
+    return tabs.getTabState(tabId);
   }
 
   function tabDisplayTitle(session: SiteSession) {
-    return tabStates.value[session.id]?.title || session.name;
+    const tab = tabs.openTabs.value.find((item) => item.sessionId === session.id);
+    return tab ? tabs.getTabState(tab.id)?.title || session.name : session.name;
   }
 
   function siteIconSrc(site?: Site | null) {
-    return toImageSrc(site?.faviconPath || site?.faviconUrl);
+    if (!site) {
+      return '';
+    }
+
+    if (site.faviconPath) {
+      return toSiteFaviconSrc(site.id, site.faviconPath);
+    }
+
+    return toImageSrc(site.faviconUrl);
   }
 
   function siteDisplayTitle(site: Site) {
@@ -493,6 +579,17 @@ export const useBrowserStore = defineStore('browser', () => {
 
   function siteInitial(site: Site) {
     return siteDisplayTitle(site).trim().slice(0, 1).toUpperCase();
+  }
+
+  function sameBounds(left: BrowserRect | null, right: BrowserRect) {
+    if (!left) {
+      return false;
+    }
+
+    return left.x === right.x
+      && left.y === right.y
+      && left.width === right.width
+      && left.height === right.height;
   }
 
   function isActiveBrowserState(state: BrowserState) {
@@ -513,18 +610,24 @@ export const useBrowserStore = defineStore('browser', () => {
     selectedSessionId: tabs.selectedSessionId,
     openTabs: tabs.openTabs,
     openInternalTabs: tabs.openInternalTabs,
+    activeTab: tabs.selectedTab,
+    topLevelTabs: tabs.topLevelTabs,
+    activeSiteSessionTabs: tabs.activeSiteSessionTabs,
     globalExtensions: extensions.globalExtensions,
     siteExtensions: extensions.siteExtensions,
     popupExtensions: extensions.popupExtensions,
     globalScripts: scripts.globalScripts,
     siteScripts: scripts.siteScripts,
     browserState,
-    tabStates,
+    tabStates: tabs.statesByTabId,
     address,
     loading,
     statusMessage,
     downloads,
     downloadSettings,
+    lastDownloadUpdatedAt,
+    recentDownloadCount,
+    sessionSyncDialog,
     activeDownloads: computed(() => downloads.value.filter((download) => download.state === 'progressing')),
     selectedSite,
     selectedSession: tabs.selectedSession,
@@ -559,6 +662,7 @@ export const useBrowserStore = defineStore('browser', () => {
     hideEmbeddedView,
     showActiveView,
     setBrowserBounds,
+    scheduleBrowserBounds,
     refreshBounds,
     pauseDownload,
     resumeDownload,
@@ -567,8 +671,15 @@ export const useBrowserStore = defineStore('browser', () => {
     showDownloadInFolder,
     removeDownload,
     clearDownloads,
+    acknowledgeDownloads,
     updateDownloadSettings,
     selectDownloadPath,
+    openSessionSyncDialog,
+    closeSessionSyncDialog,
+    exportSessionSync,
+    previewSessionSyncImport,
+    applySessionSyncImport,
+    cancelSessionSyncImport,
     installGlobalExtension: extensions.installGlobalExtension,
     installSiteExtension: extensions.installSiteExtension,
     toggleGlobalExtension: extensions.toggleGlobalExtension,
@@ -617,6 +728,18 @@ function toImageSrc(value?: string) {
   }
 
   return value;
+}
+
+function toSiteFaviconSrc(siteId: string, value: string) {
+  if (/^jarvis-browser:/i.test(value)) {
+    return value;
+  }
+
+  if (value.startsWith('/')) {
+    return `jarvis-browser://assets/site-favicon/${encodeURIComponent(siteId)}`;
+  }
+
+  return toImageSrc(value);
 }
 
 function nextSessionName(site: Site) {

@@ -4,9 +4,19 @@ import { basename, dirname, extname, join } from "node:path";
 import type { DownloadState } from "../shared/types";
 import type { MetadataStore } from "./store";
 
+type PendingDownloadWrite = {
+  item: DownloadItem;
+  state: DownloadState["state"];
+  errorText?: string;
+  fallbackSavePath: string;
+  fallbackStartTime: number;
+};
+
 export class DownloadManager {
-  private readonly boundKeys = new Set<string>();
+  private readonly boundSessions = new WeakSet<Electron.Session>();
   private readonly activeItems = new Map<string, DownloadItem>();
+  private readonly pendingWrites = new Map<string, PendingDownloadWrite>();
+  private readonly writeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly window: BrowserWindow,
@@ -61,11 +71,11 @@ export class DownloadManager {
   }
 
   bindSession(key: string, targetSession: Electron.Session) {
-    if (this.boundKeys.has(key)) {
+    if (this.boundSessions.has(targetSession)) {
       return;
     }
 
-    this.boundKeys.add(key);
+    this.boundSessions.add(targetSession);
     targetSession.on("will-download", (_event: Event, item: DownloadItem) => {
       const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       const filename = basename(item.getFilename());
@@ -83,19 +93,69 @@ export class DownloadManager {
         } catch (error) {
           void this.writeItem(id, item, "interrupted", formatError(error));
           item.cancel();
+          return;
         }
       }
 
       this.activeItems.set(id, item);
       void this.writeItem(id, item, "progressing", undefined, plannedSavePath, startedAt);
       item.on("updated", (_updatedEvent, state) => {
-        void this.writeItem(id, item, state, undefined, "", startedAt);
+        this.scheduleItemWrite(id, item, state, undefined, "", startedAt);
       });
       item.once("done", (_doneEvent, state) => {
         this.activeItems.delete(id);
+        this.clearScheduledWrite(id);
         void this.writeItem(id, item, state, undefined, "", startedAt);
       });
     });
+  }
+
+  private scheduleItemWrite(
+    id: string,
+    item: DownloadItem,
+    state: DownloadState["state"],
+    errorText?: string,
+    fallbackSavePath = "",
+    fallbackStartTime = Date.now(),
+  ) {
+    this.pendingWrites.set(id, {
+      item,
+      state,
+      errorText,
+      fallbackSavePath,
+      fallbackStartTime,
+    });
+    if (this.writeTimers.has(id)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.writeTimers.delete(id);
+      const pending = this.pendingWrites.get(id);
+      if (!pending) {
+        return;
+      }
+
+      this.pendingWrites.delete(id);
+      void this.writeItem(
+        id,
+        pending.item,
+        pending.state,
+        pending.errorText,
+        pending.fallbackSavePath,
+        pending.fallbackStartTime,
+      );
+    }, 300);
+    this.writeTimers.set(id, timer);
+  }
+
+  private clearScheduledWrite(id: string) {
+    const timer = this.writeTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.writeTimers.delete(id);
+    }
+    this.pendingWrites.delete(id);
   }
 
   private requireActiveItem(downloadId: string) {

@@ -1,10 +1,10 @@
 importScripts("state-format.js");
 
-(function initJarvisLoginStateBackground() {
+(function initChromeSyncBackground() {
   "use strict";
 
-  const format = globalThis.JarvisLoginState;
-  const MESSAGE_PREFIX = "jarvis-login-state:";
+  const format = globalThis.ChromeSyncSession;
+  const MESSAGE_PREFIX = "chrome-sync:";
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message.type !== "string" || !message.type.startsWith(MESSAGE_PREFIX)) {
@@ -67,7 +67,7 @@ importScripts("state-format.js");
     }
 
     state.report.unsupported.push(
-      "Service workers, browser HTTP auth cache, client certificates, OS keychain entries, and server-side device binding cannot be exported by a browser extension.",
+      "Service workers, HTTP auth cache, client certificates, OS keychain entries, and server-side device binding cannot be exported by a browser extension.",
     );
 
     return {
@@ -440,7 +440,7 @@ importScripts("state-format.js");
 
   function assertSupportedTab(tab) {
     if (!tab || !tab.id || !format.isSupportedPageUrl(tab.url)) {
-      throw new Error("Open an http or https website tab before using this extension.");
+      throw new Error("Open an http or https website tab before using Chrome Sync.");
     }
   }
 

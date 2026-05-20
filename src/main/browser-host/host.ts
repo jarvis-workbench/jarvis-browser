@@ -45,10 +45,15 @@ import { ViewLifecycle } from "./lifecycle";
 import { JarvisMonitorController } from "./monitor/controller";
 import { formatNavigationError, isBrowserDevToolsShortcut, isBrowserReloadShortcut, isNavigationAbort } from "./navigation";
 import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
-import { createBrowserState} from "./state";
+import { createBrowserState } from "./state";
 import { ViewRegistry } from "./view-registry";
 
 const now = () => new Date().toISOString();
+
+type HttpStatusListener = {
+  tabIds: Set<string>;
+  webContentsIds: Map<number, string>;
+};
 
 const createId = () => {
   if (globalThis.crypto?.randomUUID) {
@@ -67,6 +72,8 @@ export class BrowserHost {
   private readonly failedNavigationStatusCodes = new Map<string, number>();
   private readonly externalNavigationUrls = new Map<string, string>();
   private readonly responseStatusCodes = new Map<string, number>();
+  private readonly httpStatusListeners = new Map<string, HttpStatusListener>();
+  private tabsChangedQueued = false;
   private activeTabId?: string;
   private bounds = defaultBrowserBounds;
   private readonly downloadManager: DownloadManager;
@@ -135,7 +142,7 @@ export class BrowserHost {
       await this.jarvisScriptRuntime.refreshUserScriptWorkers();
     }
     await this.createViewForTab(tab, targetSession);
-    await this.activateTab(tab.id);
+    await this.activateTab(tab.id, { emitTabs: false });
     await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
     this.emitTabsChanged();
     return structuredClone(tab);
@@ -169,11 +176,10 @@ export class BrowserHost {
     const targetSession = getElectronSession(input.siteId, input.sessionId);
 
     await this.createViewForTab(tab, targetSession);
-    await this.extensionRuntime.loadEnabledForSite(site);
-    await this.jarvisScriptRuntime.refreshUserScriptWorkers();
-    await this.activateTab(tab.id);
-    await this.loadUrlSafely(normalizeHttpUrl(site.url), this.views.get(tab.id), tab.id);
+    await this.activateTab(tab.id, { emitTabs: false });
+    this.emitBrowserState(tab.id);
     this.emitTabsChanged();
+    this.runViewTask(tab.id, this.prepareAndLoadSiteTab(tab.id, site));
     return structuredClone(tab);
   }
 
@@ -194,7 +200,7 @@ export class BrowserHost {
     });
 
     await this.createViewForTab(tab, getDefaultProfileSession());
-    await this.activateTab(tab.id);
+    await this.activateTab(tab.id, { emitTabs: false });
     await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
     this.emitTabsChanged();
     return structuredClone(tab);
@@ -207,17 +213,20 @@ export class BrowserHost {
     };
   }
 
-  async activateTab(tabId: string) {
+  async activateTab(tabId: string, options: { emitTabs?: boolean } = {}) {
     const tab = this.tabs.get(tabId);
     if (!tab) {
       throw new Error("标签不存在");
     }
 
     this.browserOverlayHost.closeOverlay();
+    const wasActive = this.activeTabId === tab.id;
     this.activeTabId = tab.id;
     this.viewRegistry.activate(tab.id);
     this.emitBrowserState(tab.id);
-    this.emitTabsChanged();
+    if (!wasActive && options.emitTabs !== false) {
+      this.emitTabsChanged();
+    }
   }
 
   async closeTab(tabId: string) {
@@ -240,7 +249,7 @@ export class BrowserHost {
       const nextTab = [...this.tabs.values()].at(-1);
       this.activeTabId = undefined;
       if (nextTab) {
-        await this.activateTab(nextTab.id);
+        await this.activateTab(nextTab.id, { emitTabs: false });
       } else {
         await this.openInternalPage({ pageId: "newtab" });
         return;
@@ -400,6 +409,7 @@ export class BrowserHost {
     this.failedNavigationUrls.clear();
     this.failedNavigationStatusCodes.clear();
     this.responseStatusCodes.clear();
+    this.httpStatusListeners.clear();
     this.activeTabId = undefined;
     this.viewRegistry.setMountedViewKey(undefined);
     this.jarvisScriptRuntime.close();
@@ -427,6 +437,10 @@ export class BrowserHost {
       viewCount: this.views.size,
       viewKeys: [...this.views.keys()],
     };
+  }
+
+  emitSiteMetadataUpdated() {
+    this.emitMetadataUpdate();
   }
 
   async installGlobalUnpacked() {
@@ -650,6 +664,16 @@ export class BrowserHost {
       return;
     }
 
+    if (input.action === "session-sync") {
+      this.browserOverlayHost.closeOverlay();
+      setTimeout(() => {
+        if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
+          this.window.webContents.send("session-sync:open-dialog", { scope: "global" });
+        }
+      }, 0);
+      return;
+    }
+
     if (input.action === "clear-browsing-data") {
       await this.openInternalPage({ pageId: "clear-browsing-data" });
       return;
@@ -788,6 +812,26 @@ export class BrowserHost {
     return tab;
   }
 
+  private patchTab(tab: BrowserTab, patch: Partial<Pick<BrowserTab, "url" | "title" | "favicon">>) {
+    let changed = false;
+    if (patch.url !== undefined && tab.url !== patch.url) {
+      tab.url = patch.url;
+      changed = true;
+    }
+    if (patch.title !== undefined && tab.title !== patch.title) {
+      tab.title = patch.title;
+      changed = true;
+    }
+    if (Object.hasOwn(patch, "favicon") && tab.favicon !== patch.favicon) {
+      tab.favicon = patch.favicon;
+      changed = true;
+    }
+    if (changed) {
+      tab.updatedAt = now();
+    }
+    return changed;
+  }
+
   private async createViewForTab(tab: BrowserTab, targetSession: Electron.Session) {
     registerInternalProtocolForSession(targetSession);
     this.downloadManager.bindSession(tab.id, targetSession);
@@ -806,6 +850,7 @@ export class BrowserHost {
 
     this.views.set(tab.id, view);
     this.lifecycle.markOpen(tab.id);
+    this.registerHttpStatusListener(tab.id, tab.partition, targetSession, view.webContents.id);
     this.bindNavigationEvents(view, tab.id);
     if (tab.kind !== "internal") {
       this.bindMonitor(view, tab.id, tab.siteId, tab.sessionId);
@@ -822,18 +867,69 @@ export class BrowserHost {
     });
   }
 
-  private bindNavigationEvents(view: WebContentsView, tabId: string) {
-    const webContents = view.webContents;
-    webContents.session.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
-      if (!this.isViewAlive(tabId, webContents)) {
+  private registerHttpStatusListener(tabId: string, partition: string, targetSession: Electron.Session, webContentsId: number) {
+    const existing = this.httpStatusListeners.get(partition);
+    if (existing) {
+      existing.tabIds.add(tabId);
+      existing.webContentsIds.set(webContentsId, tabId);
+      return;
+    }
+
+    const listener: HttpStatusListener = {
+      tabIds: new Set([tabId]),
+      webContentsIds: new Map([[webContentsId, tabId]]),
+    };
+    this.httpStatusListeners.set(partition, listener);
+    targetSession.webRequest.onCompleted({ urls: ["http://*/*", "https://*/*"] }, (details) => {
+      if (details.resourceType !== "mainFrame" || details.statusCode < 400) {
         return;
       }
 
-      if (details.webContentsId === webContents.id && details.resourceType === "mainFrame" && details.statusCode >= 400) {
-        this.responseStatusCodes.set(tabId, details.statusCode);
-        void this.handleHttpStatusPage(tabId, details.url, details.statusCode);
+      if (details.webContentsId === undefined) {
+        return;
       }
+
+      const targetTabId = listener.webContentsIds.get(details.webContentsId);
+      if (!targetTabId) {
+        return;
+      }
+
+      const view = this.views.get(targetTabId);
+      if (!view || !this.isViewAlive(targetTabId, view.webContents)) {
+        return;
+      }
+
+      this.responseStatusCodes.set(targetTabId, details.statusCode);
+      void this.handleHttpStatusPage(targetTabId, details.url, details.statusCode);
     });
+  }
+
+  private unregisterHttpStatusListener(tabId: string) {
+    const tab = this.tabs.get(tabId);
+    if (!tab) {
+      return;
+    }
+
+    const listener = this.httpStatusListeners.get(tab.partition);
+    if (!listener) {
+      return;
+    }
+
+    listener.tabIds.delete(tabId);
+    for (const [webContentsId, mappedTabId] of listener.webContentsIds) {
+      if (mappedTabId === tabId) {
+        listener.webContentsIds.delete(webContentsId);
+      }
+    }
+
+    if (listener.tabIds.size === 0) {
+      this.httpStatusListeners.delete(tab.partition);
+      electronSession.fromPartition(tab.partition).webRequest.onCompleted(null);
+    }
+  }
+
+  private bindNavigationEvents(view: WebContentsView, tabId: string) {
+    const webContents = view.webContents;
     webContents.setWindowOpenHandler(({ url }) => {
       if (!this.isViewAlive(tabId, webContents)) {
         return { action: "deny" };
@@ -899,12 +995,16 @@ export class BrowserHost {
       }
 
       const tab = this.tabs.get(tabId);
+      let tabChanged = false;
       if (tab && !isInternalErrorPageUrl(webContents.getURL())) {
-        tab.title = this.resolveCanonicalTabTitle(tab, title);
-        tab.updatedAt = now();
+        tabChanged = this.patchTab(tab, {
+          title: this.resolveCanonicalTabTitle(tab, title),
+        });
       }
       this.emitBrowserState(tabId);
-      this.emitTabsChanged();
+      if (tabChanged) {
+        this.emitTabsChanged();
+      }
     });
   }
 
@@ -924,17 +1024,21 @@ export class BrowserHost {
     this.externalNavigationUrls.delete(tabId);
     this.responseStatusCodes.delete(tabId);
     const tab = this.tabs.get(tabId);
+    let tabChanged = false;
     if (tab) {
       const canonicalUrl = this.resolveCanonicalTabUrl(tab, url);
-      tab.url = canonicalUrl;
-      tab.title = this.resolveCanonicalTabTitle(tab, view.webContents.getTitle());
-      tab.updatedAt = now();
+      tabChanged = this.patchTab(tab, {
+        url: canonicalUrl,
+        title: this.resolveCanonicalTabTitle(tab, view.webContents.getTitle()),
+      });
       if (tab.kind !== "internal") {
         this.recordHistoryNavigation(tab, canonicalUrl, view.webContents.getTitle());
       }
     }
     this.emitBrowserState(tabId);
-    this.emitTabsChanged();
+    if (tabChanged) {
+      this.emitTabsChanged();
+    }
   }
 
   private resolveCanonicalTabUrl(tab: BrowserTab, navigatedUrl: string) {
@@ -1059,6 +1163,21 @@ export class BrowserHost {
     });
   }
 
+  private async prepareAndLoadSiteTab(tabId: string, site: NonNullable<ReturnType<MetadataStore["getSite"]>>) {
+    const view = this.views.get(tabId);
+    if (!view || !this.isViewAlive(tabId, view.webContents)) {
+      return;
+    }
+
+    await this.extensionRuntime.loadEnabledForSite(site);
+    await this.jarvisScriptRuntime.refreshUserScriptWorkers();
+    if (!this.isViewAlive(tabId, view.webContents)) {
+      return;
+    }
+
+    await this.loadUrlSafely(normalizeHttpUrl(site.url), view, tabId);
+  }
+
   private async sendJarvisScriptMessageToWebContents(input: {
     siteId?: string;
     sessionId?: string;
@@ -1133,6 +1252,7 @@ export class BrowserHost {
 
   private cleanupViewLifecycle(viewKey: string) {
     this.lifecycle.cleanup(viewKey);
+    this.unregisterHttpStatusListener(viewKey);
     this.failedNavigationUrls.delete(viewKey);
     this.failedNavigationStatusCodes.delete(viewKey);
     this.externalNavigationUrls.delete(viewKey);
@@ -1281,7 +1401,19 @@ export class BrowserHost {
       return;
     }
 
-    this.window.webContents.send("browser:tabs-changed", this.listTabs());
+    if (this.tabsChangedQueued) {
+      return;
+    }
+
+    this.tabsChangedQueued = true;
+    queueMicrotask(() => {
+      this.tabsChangedQueued = false;
+      if (this.window.isDestroyed() || this.window.webContents.isDestroyed()) {
+        return;
+      }
+
+      this.window.webContents.send("browser:tabs-changed", this.listTabs());
+    });
   }
 
   private emitMetadataUpdate() {
@@ -1290,13 +1422,16 @@ export class BrowserHost {
     }
 
     const sites = this.store.listSites();
-    this.syncSiteTabMetadata(sites);
+    const tabsChanged = this.syncSiteTabMetadata(sites);
     this.window.webContents.send("site:metadata-updated", sites);
-    this.emitTabsChanged();
+    if (tabsChanged) {
+      this.emitTabsChanged();
+    }
   }
 
   private syncSiteTabMetadata(sites = this.store.listSites()) {
     const sitesById = new Map(sites.map((site) => [site.id, site]));
+    let changed = false;
     for (const tab of this.tabs.values()) {
       if (tab.kind !== "site" || !tab.siteId) {
         continue;
@@ -1308,17 +1443,17 @@ export class BrowserHost {
       }
 
       const favicon = site.faviconPath || site.faviconUrl;
-      tab.favicon = favicon || undefined;
-      tab.updatedAt = now();
-
+      const nextFavicon = favicon || undefined;
+      changed = this.patchTab(tab, { favicon: nextFavicon }) || changed;
       const state = this.viewStates.get(tab.id);
-      if (state) {
+      if (state && state.favicon !== nextFavicon) {
         this.viewStates.set(tab.id, {
           ...state,
-          favicon: tab.favicon,
+          favicon: nextFavicon,
         });
       }
     }
+    return changed;
   }
 
   private getActiveView() {

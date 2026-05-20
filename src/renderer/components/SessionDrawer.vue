@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AddOne, Delete, Save } from '@icon-park/vue-next';
+import { AddOne, Delete, Save, TransferData } from '@icon-park/vue-next';
 import { ElButton, ElInput, ElMessage } from 'element-plus';
 import { computed, ref, watch } from 'vue';
 import type { Site, SiteSession } from '../../shared/types';
@@ -34,6 +34,7 @@ const editingSiteUrl = ref('');
 const savingSite = ref(false);
 const creatingSession = ref(false);
 const creatingSessionName = ref('');
+const failedIconSrcBySiteId = ref(new Map<string, string>());
 
 const isSettingsMode = computed(() => Boolean(props.settingsSiteId));
 
@@ -248,6 +249,49 @@ function siteDisplayTitle(site: Site) {
 function siteInitial(site: Site) {
   return siteDisplayTitle(site).trim().slice(0, 1).toUpperCase();
 }
+
+function siteIconSrc(site: Site) {
+  const src = browser.siteIconSrc(site);
+  if (!src) {
+    return '';
+  }
+
+  if (failedIconSrcBySiteId.value.get(site.id) === src) {
+    return '';
+  }
+
+  return src;
+}
+
+function markIconFailed(site: Site) {
+  const src = browser.siteIconSrc(site);
+  if (!src) {
+    return;
+  }
+
+  failedIconSrcBySiteId.value = new Map(failedIconSrcBySiteId.value).set(site.id, src);
+}
+
+function markIconLoaded(siteId: string) {
+  if (!failedIconSrcBySiteId.value.has(siteId)) {
+    return;
+  }
+
+  const nextFailures = new Map(failedIconSrcBySiteId.value);
+  nextFailures.delete(siteId);
+  failedIconSrcBySiteId.value = nextFailures;
+}
+
+async function openSessionSyncDialog() {
+  if (!drawerSite.value) {
+    return;
+  }
+
+  await browser.openSessionSyncDialog({
+    scope: 'site',
+    siteId: drawerSite.value.id,
+  });
+}
 </script>
 
 <template>
@@ -270,7 +314,13 @@ function siteInitial(site: Site) {
         @click="selectedDrawerSiteId = site.id"
       >
         <span class="site-picker-row__icon">
-          <img v-if="browser.siteIconSrc(site)" :src="browser.siteIconSrc(site)" alt="" />
+          <img
+            v-if="siteIconSrc(site)"
+            :src="siteIconSrc(site)"
+            alt=""
+            @load="markIconLoaded(site.id)"
+            @error="markIconFailed(site)"
+          />
           <span v-else class="site-fallback-icon">{{ siteInitial(site) }}</span>
         </span>
         <span>
@@ -283,13 +333,25 @@ function siteInitial(site: Site) {
     <div v-if="drawerSite" class="drawer-section">
       <div class="drawer-section__head">
         <span class="drawer-section__site-icon">
-          <img v-if="browser.siteIconSrc(drawerSite)" :src="browser.siteIconSrc(drawerSite)" alt="" />
+          <img
+            v-if="siteIconSrc(drawerSite)"
+            :src="siteIconSrc(drawerSite)"
+            alt=""
+            @load="markIconLoaded(drawerSite.id)"
+            @error="markIconFailed(drawerSite)"
+          />
           <span v-else class="site-fallback-icon">{{ siteInitial(drawerSite) }}</span>
         </span>
         <span class="drawer-section__site-text">
           <strong>{{ siteDisplayTitle(drawerSite) }}</strong>
           <span>{{ isSettingsMode || showSitePicker ? drawerSite.url : selectedUrl }}</span>
         </span>
+      </div>
+      <div v-if="!showSitePicker" class="drawer-actions drawer-actions--sync">
+        <ElButton @click="openSessionSyncDialog">
+          <TransferData theme="outline" size="16" />
+          导入/导出
+        </ElButton>
       </div>
     </div>
 
@@ -698,6 +760,10 @@ function siteInitial(site: Site) {
 .session-row__actions .session-action-text--danger:hover {
   background: #fff5f5;
   color: #d9363e;
+}
+
+.drawer-actions--sync :deep(.el-button) {
+  width: 100%;
 }
 
 .site-settings-form {

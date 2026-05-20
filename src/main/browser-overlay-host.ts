@@ -12,11 +12,15 @@ type OpenToolOverlayInput = {
   webPreferences?: Electron.BrowserWindowConstructorOptions["webPreferences"];
 };
 
+const overlayShadowInset = 12;
+
 export class BrowserOverlayHost {
   private popupWindow?: BrowserWindow;
   private activePopup?: {
     key: string;
     anchor: BrowserRect;
+    anchorXMode: "left" | "right";
+    anchorRightOffset: number;
     width: number;
     height: number;
   };
@@ -90,7 +94,7 @@ export class BrowserOverlayHost {
       return;
     }
 
-    if (this.activePopup && isPointInsideRect(mouse.x, mouse.y, this.activePopup.anchor)) {
+    if (this.activePopup && isPointInsideRect(mouse.x, mouse.y, this.resolveActiveAnchor(this.activePopup))) {
       return;
     }
 
@@ -118,7 +122,7 @@ export class BrowserOverlayHost {
     }
 
     this.popupWindow.setBounds(this.resolveOverlayBounds(
-      this.activePopup.anchor,
+      this.resolveActiveAnchor(this.activePopup),
       this.activePopup.width,
       this.activePopup.height,
     ));
@@ -134,12 +138,10 @@ export class BrowserOverlayHost {
     validateAnchor(input.anchor);
     if (this.activePopup?.key === input.key && this.popupWindow && !this.popupWindow.isDestroyed()) {
       const existingWindow = this.popupWindow;
+      const nextPopup = this.createActivePopup(input.key, input.anchor, input.width, input.height);
       existingWindow.setBounds(this.resolveOverlayBounds(input.anchor, input.width, input.height));
       this.activePopup = {
-        key: input.key,
-        anchor: input.anchor,
-        width: input.width,
-        height: input.height,
+        ...nextPopup,
       };
       return { popupWindow: existingWindow, reused: true };
     }
@@ -157,21 +159,18 @@ export class BrowserOverlayHost {
       fullscreenable: false,
       focusable: false,
       skipTaskbar: true,
-      width: input.width,
-      height: input.height,
+      transparent: true,
+      hasShadow: false,
+      width: bounds.width,
+      height: bounds.height,
       x: bounds.x,
       y: bounds.y,
-      backgroundColor: "#ffffff",
+      backgroundColor: "#00000000",
       webPreferences: input.webPreferences,
     });
 
     this.popupWindow = popupWindow;
-    this.activePopup = {
-      key: input.key,
-      anchor: input.anchor,
-      width: input.width,
-      height: input.height,
-    };
+    this.activePopup = this.createActivePopup(input.key, input.anchor, input.width, input.height);
 
     popupWindow.setMenuBarVisibility(false);
     popupWindow.once("ready-to-show", () => {
@@ -189,9 +188,35 @@ export class BrowserOverlayHost {
     return { popupWindow, reused: false };
   }
 
+  private createActivePopup(key: string, anchor: BrowserRect, width: number, height: number) {
+    const contentBounds = this.parentWindow.getContentBounds();
+    return {
+      key,
+      anchor,
+      anchorXMode: anchor.x + anchor.width / 2 > contentBounds.width / 2 ? "right" as const : "left" as const,
+      anchorRightOffset: Math.max(0, contentBounds.width - anchor.x - anchor.width),
+      width,
+      height,
+    };
+  }
+
+  private resolveActiveAnchor(activePopup: NonNullable<BrowserOverlayHost["activePopup"]>) {
+    if (activePopup.anchorXMode === "left") {
+      return activePopup.anchor;
+    }
+
+    const contentBounds = this.parentWindow.getContentBounds();
+    return {
+      ...activePopup.anchor,
+      x: Math.max(0, contentBounds.width - activePopup.anchorRightOffset - activePopup.anchor.width),
+    };
+  }
+
   private resolveOverlayBounds(anchor: BrowserRect, width: number, height: number) {
     validateAnchor(anchor);
     const gap = 8;
+    const outerWidth = width + overlayShadowInset * 2;
+    const outerHeight = height + overlayShadowInset * 2;
     const contentBounds = this.parentWindow.getContentBounds();
     const preferredX = contentBounds.x + anchor.x + anchor.width - width;
     const preferredY = contentBounds.y + anchor.y + anchor.height + gap;
@@ -208,10 +233,10 @@ export class BrowserOverlayHost {
       : preferredY;
 
     return {
-      x: clamp(preferredX, workArea.x, workArea.x + workArea.width - width),
-      y: clamp(y, workArea.y, workArea.y + workArea.height - height),
-      width,
-      height,
+      x: clamp(preferredX - overlayShadowInset, workArea.x, workArea.x + workArea.width - outerWidth),
+      y: clamp(y - overlayShadowInset, workArea.y, workArea.y + workArea.height - outerHeight),
+      width: outerWidth,
+      height: outerHeight,
     };
   }
 
@@ -221,7 +246,7 @@ export class BrowserOverlayHost {
       return false;
     }
 
-    return this.isActive(key) && rectsEqual(activePopup.anchor, anchor);
+    return this.isActive(key) && rectsEqual(this.resolveActiveAnchor(activePopup), anchor);
   }
 
   private hasOpenOverlay() {

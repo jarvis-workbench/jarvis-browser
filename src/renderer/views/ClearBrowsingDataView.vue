@@ -304,20 +304,17 @@ function formatError(error: unknown) {
 
 <style scoped>
 .clear-data-page {
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow: visible;
   background: #f8fafc;
 }
 
 .clear-data-page__body {
   display: grid;
   width: min(1120px, 100%);
-  height: 100%;
-  min-height: 0;
   align-content: start;
   gap: 16px;
   margin: 0 auto;
-  overflow: auto;
   padding: 30px;
 }
 

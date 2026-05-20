@@ -1,4 +1,6 @@
 import { session } from "electron";
+import { join } from "node:path";
+import { dataPaths } from "./data-paths";
 
 export const defaultProfileId = "default";
 export const profilePartitionPrefix = "persist:profile-";
@@ -26,4 +28,16 @@ export function createProfilePartition(profileId: string) {
 
 export function createSessionPartition(siteId: string, sessionId: string) {
   return `persist:site-${siteId}-session-${sessionId}`;
+}
+
+export function partitionNameFromPartition(partition: string) {
+  return partition.replace(/^persist:/, "");
+}
+
+export function getSessionPartitionDataPath(siteId: string, sessionId: string) {
+  return join(
+    dataPaths.runtime.sessionData,
+    "Partitions",
+    partitionNameFromPartition(createSessionPartition(siteId, sessionId)),
+  );
 }

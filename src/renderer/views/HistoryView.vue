@@ -3,11 +3,13 @@ import { Delete, Refresh, Search, Time } from '@icon-park/vue-next';
 import { ElButton, ElInput, ElMessage, ElSelect, ElOption } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import type { HistoryClearInput, HistoryListInput, HistoryRecord } from '../../shared/types';
+import { useBrowserStore } from '../stores/browser';
 
+const browser = useBrowserStore();
 const records = ref<HistoryRecord[]>([]);
 const loading = ref(false);
 const searchText = ref('');
-const partition = ref('');
+const siteId = ref('');
 const origin = ref('');
 const limit = ref(200);
 
@@ -15,7 +17,7 @@ const filteredRecords = computed(() => {
   const keyword = searchText.value.trim().toLowerCase();
 
   return records.value.filter((record) => {
-    if (partition.value && record.partition !== partition.value) {
+    if (siteId.value && record.siteId !== siteId.value) {
       return false;
     }
 
@@ -31,17 +33,18 @@ const filteredRecords = computed(() => {
       record.title,
       record.url,
       record.origin,
-      record.partition,
+      siteSessionText(record),
     ].some((value) => value?.toLowerCase().includes(keyword));
   });
 });
 
-const partitionOptions = computed(() => unique(records.value.map((record) => record.partition)));
+const siteOptions = computed(() => browser.sites.filter((site) => records.value.some((record) => record.siteId === site.id)));
 const originOptions = computed(() => unique(
   records.value
-    .filter((record) => !partition.value || record.partition === partition.value)
+    .filter((record) => !siteId.value || record.siteId === siteId.value)
     .map((record) => record.origin),
 ));
+const selectedSite = computed(() => browser.sites.find((site) => site.id === siteId.value) ?? null);
 
 onMounted(() => {
   void loadHistory();
@@ -79,7 +82,8 @@ async function clearOrigin(record: HistoryRecord) {
 
   try {
     await window.appApi.history.clear({
-      partition: record.partition,
+      siteId: record.siteId,
+      sessionId: record.sessionId,
       origin: record.origin,
     });
     await loadHistory();
@@ -98,7 +102,7 @@ function createListInput(): HistoryListInput {
 
 function createClearInput(): HistoryClearInput {
   return {
-    partition: partition.value.trim() || undefined,
+    siteId: siteId.value.trim() || undefined,
     origin: origin.value.trim() || undefined,
   };
 }
@@ -117,6 +121,19 @@ function hostText(url: string) {
 
 function dateText(value: string) {
   return new Date(value).toLocaleString();
+}
+
+function siteSessionText(record: HistoryRecord) {
+  const site = record.siteId ? browser.sites.find((item) => item.id === record.siteId) : undefined;
+  const session = record.sessionId ? site?.sessions.find((item) => item.id === record.sessionId) : undefined;
+  if (site && session) {
+    return `${browser.siteDisplayTitle(site)} / ${session.name}`;
+  }
+  if (site) {
+    return browser.siteDisplayTitle(site);
+  }
+
+  return '默认浏览';
 }
 
 function unique(values: string[]) {
@@ -154,12 +171,12 @@ function formatError(error: unknown) {
             <Search theme="outline" size="15" />
           </template>
         </ElInput>
-        <ElSelect v-model="partition" clearable filterable placeholder="全部分区">
+        <ElSelect v-model="siteId" clearable filterable placeholder="全部站点">
           <ElOption
-            v-for="item in partitionOptions"
-            :key="item"
-            :label="item"
-            :value="item"
+            v-for="site in siteOptions"
+            :key="site.id"
+            :label="browser.siteDisplayTitle(site)"
+            :value="site.id"
           />
         </ElSelect>
         <ElSelect v-model="origin" clearable filterable placeholder="全部来源">
@@ -180,7 +197,7 @@ function formatError(error: unknown) {
 
       <div class="history-page__summary">
         <span>{{ filteredRecords.length }} 条记录</span>
-        <span v-if="partition">分区：{{ partition }}</span>
+        <span v-if="selectedSite">站点：{{ browser.siteDisplayTitle(selectedSite) }}</span>
         <span v-if="origin">来源：{{ origin }}</span>
       </div>
 
@@ -201,7 +218,7 @@ function formatError(error: unknown) {
           <a :href="record.url" target="_blank" rel="noreferrer">{{ record.url }}</a>
           <div class="history-row__meta">
             <span>{{ record.origin }}</span>
-            <span>{{ record.partition }}</span>
+            <span>{{ siteSessionText(record) }}</span>
             <span>{{ dateText(record.visitedAt) }}</span>
           </div>
         </div>
@@ -215,20 +232,17 @@ function formatError(error: unknown) {
 
 <style scoped>
 .history-page {
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow: visible;
   background: #f8fafc;
 }
 
 .history-page__body {
   display: grid;
   width: min(1080px, 100%);
-  height: 100%;
-  min-height: 0;
   align-content: start;
   gap: 14px;
   margin: 0 auto;
-  overflow: auto;
   padding: 30px;
 }
 
@@ -259,7 +273,7 @@ function formatError(error: unknown) {
 
 .history-filters {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(180px, 220px) minmax(200px, 260px) 120px;
+  grid-template-columns: minmax(240px, 1fr) minmax(160px, 220px) minmax(200px, 260px) 120px;
   gap: 10px;
 }
 

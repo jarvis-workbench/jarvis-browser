@@ -36,6 +36,7 @@ body {
 .header span,
 .current-tab span,
 .preview-row span,
+.limits,
 .status,
 .report {
   color: #667085;
@@ -43,7 +44,8 @@ body {
 }
 
 .current-tab,
-.preview {
+.preview,
+.limits {
   border: 1px solid #e3e7ee;
   border-radius: 8px;
   background: #ffffff;
@@ -159,6 +161,10 @@ input[type="file"] {
 
 .check-row.warning {
   color: #b45309;
+}
+
+.limits {
+  line-height: 17px;
 }
 
 .status {

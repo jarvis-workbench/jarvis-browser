@@ -1,8 +1,8 @@
-(function initJarvisLoginState(globalScope) {
+(function initChromeSyncSessionFormat(globalScope) {
   "use strict";
 
-  const VERSION = "jarvis-login-state-v1";
-  const VALUE_MARKER = "__jarvisTransferType";
+  const VERSION = "jarvis-session-sync-v1";
+  const VALUE_MARKER = "__jarvisSessionSyncType";
   const SUPPORTED_PROTOCOLS = new Set(["http:", "https:"]);
 
   function nowIso() {
@@ -299,7 +299,7 @@
     return decoded;
   }
 
-  globalScope.JarvisLoginState = {
+  globalScope.ChromeSyncSession = {
     VERSION,
     addReportError,
     base64ToBytes,

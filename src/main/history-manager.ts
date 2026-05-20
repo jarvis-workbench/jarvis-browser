@@ -62,6 +62,28 @@ export class HistoryManager {
     }
 
     const timestamp = now();
+    const existingIndex = this.records.findIndex((record) => isSameNavigationRecord(record, input, parsed.url));
+    if (existingIndex >= 0) {
+      const existing = this.records[existingIndex];
+      const nextRecord: HistoryRecord = {
+        ...existing,
+        siteId: input.siteId ?? existing.siteId,
+        sessionId: input.sessionId ?? existing.sessionId,
+        partition: input.partition,
+        origin: parsed.origin,
+        url: parsed.url,
+        title: input.title?.trim() || existing.title,
+        visitedAt: timestamp,
+      };
+      this.records = [
+        nextRecord,
+        ...this.records.slice(0, existingIndex),
+        ...this.records.slice(existingIndex + 1),
+      ].slice(0, maxHistoryRecords);
+      await this.persist();
+      return structuredClone(nextRecord);
+    }
+
     const record: HistoryRecord = {
       id: createId(),
       tabId: input.tabId,
@@ -101,6 +123,17 @@ export class HistoryManager {
       throw new Error("历史服务尚未加载");
     }
   }
+}
+
+function isSameNavigationRecord(record: HistoryRecord, input: NavigationInput, url: string) {
+  if (input.tabId && record.tabId === input.tabId && record.url === url) {
+    return true;
+  }
+
+  return Boolean(input.sessionId)
+    && record.sessionId === input.sessionId
+    && record.siteId === input.siteId
+    && record.url === url;
 }
 
 function matchesHistoryFilter(record: HistoryRecord, input: HistoryListInput | HistoryClearInput) {

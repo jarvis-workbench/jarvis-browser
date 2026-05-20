@@ -21,9 +21,10 @@ import {
   ElMessage,
 } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { BrowserRect, BrowserTab, Site, SiteSession } from '../../shared/types';
+import type { BrowserRect, Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
+import SessionSyncDialog from '../components/SessionSyncDialog.vue';
 import {
   clearBrowsingDataTabId,
   downloadsTabId,
@@ -31,25 +32,10 @@ import {
   historyTabId,
   jarvisScriptTabId,
   settingsTabId,
+  type TopLevelTab,
   type InternalPageTabId,
 } from '../stores/browser-tabs';
 import { useBrowserStore } from '../stores/browser';
-
-type DirectTopLevelTab = {
-  type: 'direct';
-  key: string;
-  tab: BrowserTab;
-};
-
-type SiteTopLevelTab = {
-  type: 'site';
-  key: string;
-  site: Site;
-  tabs: BrowserTab[];
-  activeSessionTab: BrowserTab;
-};
-
-type TopLevelTab = DirectTopLevelTab | SiteTopLevelTab;
 
 const browser = useBrowserStore();
 const browserHost = ref<HTMLElement | null>(null);
@@ -61,9 +47,10 @@ const creatingSession = ref(false);
 const creatingSessionSubmitting = ref(false);
 const newSessionName = ref('');
 const creatingSessionSite = ref<Site | null>(null);
-const lastActiveSessionTabBySiteId = ref<Record<string, string>>({});
+const nowTick = ref(Date.now());
 
 let resizeObserver: ResizeObserver | undefined;
+let downloadActivityTimer: number | undefined;
 
 const selectedUrl = computed(() => browser.browserState.displayUrl || browser.browserState.url || browser.selectedSite?.url || '');
 const displayedAddress = computed(() => {
@@ -73,7 +60,7 @@ const displayedAddress = computed(() => {
 
   return browser.address;
 });
-const activeTab = computed(() => browser.openTabs.find((tab) => tab.id === browser.activeTabId) ?? null);
+const activeTab = computed(() => browser.activeTab);
 const isHomeActive = computed(() => activeTab.value?.internalPageId === browser.homeTabId);
 const isDownloadsActive = computed(() => activeTab.value?.internalPageId === browser.downloadsTabId);
 const isSettingsActive = computed(() => activeTab.value?.internalPageId === browser.settingsTabId);
@@ -81,47 +68,8 @@ const isInternalPageActive = computed(() => activeTab.value?.kind === 'internal'
 const currentSessionName = computed(() => (
   activeTab.value?.kind === 'site' ? browser.selectedSession?.name ?? '' : ''
 ));
-const activeSiteSessionTabs = computed(() => {
-  const siteId = activeTab.value?.siteId;
-  return siteId ? browser.openSessionTabs.filter((tab) => tab.siteId === siteId) : [];
-});
-const topLevelTabs = computed<TopLevelTab[]>(() => {
-  const topTabs: TopLevelTab[] = [];
-  const siteGroups = new Map<string, SiteTopLevelTab>();
-
-  for (const tab of browser.openTabs) {
-    if (tab.kind !== 'site' || !tab.siteId) {
-      topTabs.push({
-        type: 'direct',
-        key: tab.id,
-        tab,
-      });
-      continue;
-    }
-
-    const site = browser.sites.find((item) => item.id === tab.siteId);
-    if (!site) {
-      continue;
-    }
-
-    let siteTab = siteGroups.get(site.id);
-    if (!siteTab) {
-      siteTab = {
-        type: 'site',
-        key: `site:${site.id}`,
-        site,
-        tabs: [],
-        activeSessionTab: tab,
-      };
-      siteGroups.set(site.id, siteTab);
-      topTabs.push(siteTab);
-    }
-    siteTab.tabs.push(tab);
-    siteTab.activeSessionTab = resolveActiveSessionTab(site.id, siteTab.tabs);
-  }
-
-  return topTabs;
-});
+const activeSiteSessionTabs = computed(() => browser.activeSiteSessionTabs);
+const topLevelTabs = computed(() => browser.topLevelTabs);
 const browserInsetLeft = computed(() => 0);
 const browserInsetRight = computed(() => {
   if (isInternalPageActive.value) {
@@ -137,6 +85,8 @@ const creatingSessionTitle = computed(() => (
   creatingSessionSite.value ? `新建会话 - ${creatingSessionSite.value.title}` : '新建会话'
 ));
 const activeDownloadCount = computed(() => browser.activeDownloads.length);
+const downloadIndicatorCount = computed(() => activeDownloadCount.value || browser.recentDownloadCount);
+const hasRecentDownloadActivity = computed(() => nowTick.value - browser.lastDownloadUpdatedAt < 1800);
 const downloadProgress = computed(() => {
   const activeDownloads = browser.activeDownloads.filter((download) => download.totalBytes > 0);
   if (!activeDownloads.length) {
@@ -157,7 +107,7 @@ async function setActivePanel(panel: ActivePanel) {
   tabPickerVisible.value = panel === 'tabPicker';
   sessionDrawerVisible.value = panel === 'sessionDrawer';
   creatingSession.value = panel === 'sessionCreator';
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function togglePanel(panel: Exclude<ActivePanel, null>) {
@@ -181,7 +131,7 @@ async function ensureSiteOpen() {
   }
 
   await nextTick();
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function addSession() {
@@ -200,7 +150,7 @@ async function addSession() {
     newSessionName.value = '';
     await setActivePanel(null);
     ElMessage.success('会话已创建');
-    await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+    browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
   } catch (error) {
     ElMessage.error(formatError(error));
   } finally {
@@ -209,7 +159,7 @@ async function addSession() {
 }
 
 function isTabLoading(tabId: string) {
-  return Boolean(browser.tabStates[tabId]?.isLoading);
+  return Boolean(browser.getTabState(tabId)?.isLoading);
 }
 
 function isTopLevelTabLoading(tab: TopLevelTab) {
@@ -217,11 +167,11 @@ function isTopLevelTabLoading(tab: TopLevelTab) {
 }
 
 function tabTitle(tab: { id: string; title: string; url: string }) {
-  return browser.tabStates[tab.id]?.title || tab.title || tab.url;
+  return browser.getTabState(tab.id)?.title || tab.title || tab.url;
 }
 
-function sessionTabTitle(tab: BrowserTab & { session: SiteSession }) {
-  const stateTitle = browser.tabStates[tab.id]?.title?.trim();
+function sessionTabTitle(tab: { id: string; url: string; session: SiteSession }) {
+  const stateTitle = browser.getTabState(tab.id)?.title?.trim();
   if (stateTitle && stateTitle !== tab.session.name) {
     return stateTitle;
   }
@@ -245,7 +195,7 @@ function topLevelTabFavicon(tab: TopLevelTab) {
   return tabFaviconSrc(tab.tab);
 }
 
-function tabFaviconSrc(tab: BrowserTab) {
+function tabFaviconSrc(tab: { favicon?: string }) {
   return toImageSrc(tab.favicon);
 }
 
@@ -255,21 +205,11 @@ function isTopLevelTabActive(tab: TopLevelTab) {
     : browser.activeTabId === tab.tab.id;
 }
 
-function resolveActiveSessionTab(siteId: string, tabs: BrowserTab[]) {
-  const currentActive = activeTab.value?.siteId === siteId
-    ? tabs.find((tab) => tab.id === activeTab.value?.id)
-    : undefined;
-  return currentActive
-    || tabs.find((tab) => tab.id === lastActiveSessionTabBySiteId.value[siteId])
-    || tabs.at(-1)
-    || tabs[0];
-}
-
 async function openSessionFromDrawer(session: SiteSession) {
   try {
     await browser.openSessionFromCurrentSite(session);
     await setActivePanel(null);
-    await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+    browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
   } catch (error) {
     ElMessage.error(formatError(error));
   }
@@ -279,7 +219,7 @@ async function openSessionFromPicker(site: Site, session: SiteSession) {
   try {
     await browser.openSessionFromSite(site, session);
     await setActivePanel(null);
-    await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+    browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
   } catch (error) {
     ElMessage.error(formatError(error));
   }
@@ -309,6 +249,7 @@ async function openDownloadsBubbleOverlay(event: MouseEvent) {
   try {
     const anchor = elementAnchor(event.currentTarget);
     await browser.loadDownloads();
+    browser.acknowledgeDownloads();
     await window.appApi.overlays.openDownloadsBubble({ anchor });
   } catch (error) {
     ElMessage.error(formatError(error));
@@ -360,8 +301,13 @@ function toImageSrc(value?: string) {
 }
 
 async function activateBrowserTab(tabId: string) {
-  await browser.activateOpenTab(browser.openTabs.find((tab) => tab.id === tabId)!);
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  const tab = browser.openTabs.find((item) => item.id === tabId);
+  if (!tab) {
+    return;
+  }
+
+  await browser.activateOpenTab(tab);
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function activateTopLevelTab(tab: TopLevelTab) {
@@ -370,9 +316,7 @@ async function activateTopLevelTab(tab: TopLevelTab) {
 
 async function closeBrowserTab(tabId: string) {
   await window.appApi.browser.closeTab(tabId);
-  delete browser.tabStates[tabId];
-  await browser.syncTabs();
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function closeTopLevelTab(tab: TopLevelTab) {
@@ -383,11 +327,8 @@ async function closeTopLevelTab(tab: TopLevelTab) {
 
   for (const sessionTab of tab.tabs) {
     await window.appApi.browser.closeTab(sessionTab.id);
-    delete browser.tabStates[sessionTab.id];
   }
-  delete lastActiveSessionTabBySiteId.value[tab.site.id];
-  await browser.syncTabs();
-  await browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
 }
 
 async function openCurrentSessionCreator(site?: Site) {
@@ -410,10 +351,13 @@ function formatError(error: unknown) {
 }
 
 onMounted(async () => {
+  downloadActivityTimer = window.setInterval(() => {
+    nowTick.value = Date.now();
+  }, 500);
   await ensureSiteOpen();
   if (browserHost.value) {
     resizeObserver = new ResizeObserver(() => {
-      void browser.setBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+      browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
     });
     resizeObserver.observe(browserHost.value);
   }
@@ -421,32 +365,15 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  if (downloadActivityTimer !== undefined) {
+    window.clearInterval(downloadActivityTimer);
+  }
 });
 
 watch(
-  () => browser.selectedSessionId,
-  async () => {
-    await browser.refreshBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
-  },
-);
-
-watch(
-  () => browser.activeTabId,
-  () => {
-    if (activeTab.value?.siteId) {
-      lastActiveSessionTabBySiteId.value = {
-        ...lastActiveSessionTabBySiteId.value,
-        [activeTab.value.siteId]: activeTab.value.id,
-      };
-    }
-  },
-  { immediate: true },
-);
-
-watch(
   () => [browserInsetLeft.value, browserInsetRight.value],
-  async ([insetLeft, insetRight]) => {
-    await browser.refreshBounds(browserHost.value, insetLeft, insetRight);
+  ([insetLeft, insetRight]) => {
+    browser.scheduleBrowserBounds(browserHost.value, insetLeft, insetRight);
   },
 );
 
@@ -582,7 +509,8 @@ watch(
             type="button"
             title="下载内容"
             :class="{
-              'chrome-download-button--active': activeDownloadCount > 0,
+              'chrome-download-button--active': downloadIndicatorCount > 0,
+              'chrome-download-button--pulse': hasRecentDownloadActivity,
               'chrome-toolbar-button--active': isDownloadsActive,
             }"
             :style="{ '--download-progress-value': downloadProgress }"
@@ -603,7 +531,7 @@ watch(
               />
             </svg>
             <Download theme="outline" size="18" />
-            <span v-if="activeDownloadCount > 0" class="chrome-download-button__badge">{{ activeDownloadCount }}</span>
+            <span v-if="downloadIndicatorCount > 0" class="chrome-download-button__badge">{{ downloadIndicatorCount }}</span>
           </button>
         </div>
 
@@ -652,6 +580,13 @@ watch(
           </ElButton>
         </form>
       </BrowserDrawer>
+
+      <SessionSyncDialog
+        :model-value="browser.sessionSyncDialog.visible"
+        :scope="browser.sessionSyncDialog.scope"
+        :site-id="browser.sessionSyncDialog.siteId"
+        @update:model-value="(visible) => visible ? null : browser.closeSessionSyncDialog()"
+      />
     </section>
   </main>
 </template>
@@ -811,6 +746,10 @@ watch(
   color: #1a73e8;
 }
 
+.chrome-download-button--pulse {
+  background: #e8f0fe;
+}
+
 .chrome-download-button__ring {
   position: absolute;
   inset: 0;
@@ -841,6 +780,10 @@ watch(
 }
 
 .chrome-download-button--active .chrome-download-button__ring {
+  opacity: 1;
+}
+
+.chrome-download-button--pulse .chrome-download-button__ring {
   opacity: 1;
 }
 

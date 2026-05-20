@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "Jarvis Login State Transfer",
-  "description": "Export and import website login state between Chrome and Jarvis Browser.",
+  "name": "Chrome Sync",
+  "description": "在 Chrome 与 Jarvis Browser 之间导入/导出当前标签登录状态。",
   "version": "0.1.0",
   "action": {
-    "default_title": "Login State Transfer",
+    "default_title": "Chrome Sync",
     "default_popup": "popup.html"
   },
   "background": {

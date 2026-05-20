@@ -1,8 +1,8 @@
-(function initJarvisLoginStateContentScript() {
+(function initChromeSyncContentScript() {
   "use strict";
 
-  const format = globalThis.JarvisLoginState;
-  const MESSAGE_PREFIX = "jarvis-login-state:";
+  const format = globalThis.ChromeSyncSession;
+  const MESSAGE_PREFIX = "chrome-sync:";
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || typeof message.type !== "string" || !message.type.startsWith(MESSAGE_PREFIX)) {

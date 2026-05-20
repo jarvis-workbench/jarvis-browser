@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { AddOne, Close, Globe, Search, Setting } from '@icon-park/vue-next';
 import { ElButton, ElInput, ElMessage, ElSwitch } from 'element-plus';
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import type { Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
@@ -9,17 +9,32 @@ import { useBrowserStore } from '../stores/browser';
 
 const browser = useBrowserStore();
 const addDrawerVisible = ref(false);
+const siteSearchText = ref('');
 const newSiteUrl = ref('');
 const newSessionName = ref('默认会话');
 const createFirstSession = ref(true);
 const submitting = ref(false);
-const failedIconIds = ref(new Set<string>());
+const failedIconSrcBySiteId = ref(new Map<string, string>());
 const settingsDrawerVisible = ref(false);
 const settingsSiteId = ref('');
 const sessionPickerSiteId = ref('');
 const sessionPickerVisible = ref(false);
 
 const frequentSites = computed(() => browser.sites.slice(0, 10));
+const filteredSites = computed(() => {
+  const keyword = siteSearchText.value.trim().toLowerCase();
+  if (!keyword) {
+    return browser.sites;
+  }
+
+  return browser.sites.filter((site) => {
+    return [
+      siteDisplayTitle(site),
+      site.url,
+      ...site.sessions.map((session) => session.name),
+    ].some((value) => value.toLowerCase().includes(keyword));
+  });
+});
 const sessionPickerSite = computed(() => {
   return browser.sites.find((site) => site.id === sessionPickerSiteId.value) ?? null;
 });
@@ -76,12 +91,17 @@ function closeSessionPicker() {
 }
 
 async function openPickedSession(session: SiteSession) {
-  if (!sessionPickerSite.value) {
+  const site = sessionPickerSite.value;
+  if (!site) {
     return;
   }
 
-  await browser.openSessionFromSite(sessionPickerSite.value, session);
   closeSessionPicker();
+  await nextTick();
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+  await browser.openSessionFromSite(site, session);
 }
 
 function openSiteSettings(site: Site) {
@@ -107,15 +127,35 @@ async function createSessionForSettings(site: Site, name: string) {
 }
 
 function siteIconSrc(site: Site) {
-  if (failedIconIds.value.has(site.id)) {
+  const src = browser.siteIconSrc(site);
+  if (!src) {
     return '';
   }
 
-  return toImageSrc(site.faviconPath || site.faviconUrl);
+  if (failedIconSrcBySiteId.value.get(site.id) === src) {
+    return '';
+  }
+
+  return src;
 }
 
-function markIconFailed(siteId: string) {
-  failedIconIds.value = new Set([...failedIconIds.value, siteId]);
+function markIconFailed(site: Site) {
+  const src = browser.siteIconSrc(site);
+  if (!src) {
+    return;
+  }
+
+  failedIconSrcBySiteId.value = new Map(failedIconSrcBySiteId.value).set(site.id, src);
+}
+
+function markIconLoaded(siteId: string) {
+  if (!failedIconSrcBySiteId.value.has(siteId)) {
+    return;
+  }
+
+  const nextFailures = new Map(failedIconSrcBySiteId.value);
+  nextFailures.delete(siteId);
+  failedIconSrcBySiteId.value = nextFailures;
 }
 
 function siteInitial(site: Site) {
@@ -124,22 +164,6 @@ function siteInitial(site: Site) {
 
 function siteDisplayTitle(site: Site) {
   return site.title || new URL(site.url).hostname;
-}
-
-function toImageSrc(value?: string) {
-  if (!value) {
-    return '';
-  }
-
-  if (/^(https?:|file:|data:|jarvis-browser:)/i.test(value)) {
-    return value;
-  }
-
-  if (value.startsWith('/')) {
-    return `file://${value.split('/').map(encodeURIComponent).join('/')}`;
-  }
-
-  return value;
 }
 
 function formatError(error: unknown) {
@@ -155,7 +179,7 @@ function formatError(error: unknown) {
         <h1>Jarvis</h1>
         <div class="chrome-start__search">
           <Search theme="outline" size="20" />
-          <input v-model="newSiteUrl" type="text" placeholder="搜索或输入网址" />
+          <input v-model="siteSearchText" type="text" placeholder="搜索站点" />
         </div>
 
         <div class="chrome-shortcuts" aria-label="站点快捷方式">
@@ -167,7 +191,13 @@ function formatError(error: unknown) {
             @click="openSessionPicker(site)"
           >
             <span class="chrome-shortcut__icon">
-              <img v-if="siteIconSrc(site)" :src="siteIconSrc(site)" alt="" @error="markIconFailed(site.id)" />
+              <img
+                v-if="siteIconSrc(site)"
+                :src="siteIconSrc(site)"
+                alt=""
+                @load="markIconLoaded(site.id)"
+                @error="markIconFailed(site)"
+              />
               <span v-else class="site-fallback-icon">{{ siteInitial(site) }}</span>
             </span>
             <span class="chrome-shortcut__title">{{ siteDisplayTitle(site) }}</span>
@@ -183,10 +213,16 @@ function formatError(error: unknown) {
       </section>
 
       <section v-if="browser.sites.length" class="site-grid" aria-label="站点列表">
-        <article v-for="site in browser.sites" :key="site.id" class="site-card">
+        <article v-for="site in filteredSites" :key="site.id" class="site-card">
           <button class="site-card__main" type="button" @click="openSessionPicker(site)">
             <span class="site-card__icon">
-              <img v-if="siteIconSrc(site)" :src="siteIconSrc(site)" alt="" @error="markIconFailed(site.id)" />
+              <img
+                v-if="siteIconSrc(site)"
+                :src="siteIconSrc(site)"
+                alt=""
+                @load="markIconLoaded(site.id)"
+                @error="markIconFailed(site)"
+              />
               <span v-else class="site-fallback-icon">{{ siteInitial(site) }}</span>
             </span>
             <span class="site-card__content">
@@ -204,6 +240,9 @@ function formatError(error: unknown) {
           </button>
         </article>
       </section>
+      <p v-if="browser.sites.length && !filteredSites.length" class="site-grid-empty">
+        没有匹配的站点
+      </p>
     </div>
 
     <SessionDrawer
@@ -233,7 +272,8 @@ function formatError(error: unknown) {
                 v-if="siteIconSrc(sessionPickerSite)"
                 :src="siteIconSrc(sessionPickerSite)"
                 alt=""
-                @error="markIconFailed(sessionPickerSite.id)"
+                @load="markIconLoaded(sessionPickerSite.id)"
+                @error="markIconFailed(sessionPickerSite)"
               />
               <span v-else class="site-fallback-icon">{{ siteInitial(sessionPickerSite) }}</span>
             </span>

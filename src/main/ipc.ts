@@ -4,6 +4,7 @@ import { BrowserHost } from "./browser-host";
 import { parseBrowserOverlayAction } from "./browser-overlay-menu";
 import { getElectronSession } from "./electron-session-manager";
 import { HistoryManager } from "./history-manager";
+import { SessionSyncManager } from "./session-sync-manager";
 import { StorageManager } from "./storage-manager";
 import { MetadataStore } from "./store";
 
@@ -15,6 +16,8 @@ export const registerIpc = (
   historyManager: HistoryManager,
   storageManager: StorageManager,
 ) => {
+  const sessionSyncManager = new SessionSyncManager(store, browserHost);
+
   ipcMain.handle("sites:list", invoke(() => store.listSites()));
   ipcMain.handle("sites:add", (_event, input: Parameters<AppApi["sites"]["add"]>[0]) =>
     store.addSite(input),
@@ -207,6 +210,20 @@ export const registerIpc = (
   );
   ipcMain.handle("storage:clear-data", (_event, input: Parameters<AppApi["storage"]["clearData"]>[0]) =>
     storageManager.clearData(input),
+  );
+  ipcMain.handle("session-sync:export", (_event, input: Parameters<AppApi["sessionSync"]["export"]>[0]) =>
+    sessionSyncManager.export(input),
+  );
+  ipcMain.handle("session-sync:preview-import", (_event, input: Parameters<AppApi["sessionSync"]["previewImport"]>[0]) =>
+    sessionSyncManager.previewImport(input),
+  );
+  ipcMain.handle("session-sync:apply-import", async (_event, input: Parameters<AppApi["sessionSync"]["applyImport"]>[0]) => {
+    const result = await sessionSyncManager.applyImport(input);
+    browserHost.emitSiteMetadataUpdated();
+    return result;
+  });
+  ipcMain.handle("session-sync:cancel-import", (_event, importId: string) =>
+    sessionSyncManager.cancelImport(importId),
   );
   ipcMain.handle("settings:get", invoke(() => store.getDownloadSettings()));
   ipcMain.handle("settings:update", (_event, input: Parameters<AppApi["settings"]["update"]>[0]) =>

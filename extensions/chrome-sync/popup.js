@@ -1,8 +1,9 @@
-(function initJarvisLoginStatePopup() {
+(function initChromeSyncPopup() {
   "use strict";
 
-  const format = globalThis.JarvisLoginState;
-  const MESSAGE_PREFIX = "jarvis-login-state:";
+  const format = globalThis.ChromeSyncSession;
+  const packages = globalThis.ChromeSyncPackage;
+  const MESSAGE_PREFIX = "chrome-sync:";
   const elements = {
     allowOriginMismatch: document.getElementById("allow-origin-mismatch"),
     browserName: document.getElementById("browser-name"),
@@ -44,7 +45,7 @@
   }
 
   async function exportState() {
-    setBusy(true, "正在导出当前网站状态...");
+    setBusy(true, "正在导出当前标签登录状态...");
     clearReport();
     try {
       const response = await sendRuntimeMessage({
@@ -59,9 +60,9 @@
 
       const state = response.result.state;
       const summary = response.result.summary;
-      downloadStateFile(state);
+      await downloadStatePackage(state, summary);
       renderReport("导出完成", state.report, summary);
-      setStatus("已生成状态文件。", "success");
+      setStatus("已生成 Chrome Sync 文件。", "success");
     } catch (error) {
       setStatus(stringifyError(error), "error");
     } finally {
@@ -79,15 +80,15 @@
     }
 
     try {
-      const state = JSON.parse(await file.text());
-      const validation = format.validateState(state);
+      const result = await packages.readZipPackage(file);
+      const validation = format.validateState(result.state);
       if (!validation.ok) {
         throw new Error(validation.errors.join(" "));
       }
-      pendingState = state;
-      renderPreview(state);
+      pendingState = result.state;
+      renderPreview(result.state);
       elements.importState.disabled = !format.isSupportedPageUrl(currentTab && currentTab.url);
-      setStatus("状态文件已读取，确认后可导入。", "success");
+      setStatus("Chrome Sync 文件已读取，确认后可导入。", "success");
     } catch (error) {
       elements.preview.classList.add("hidden");
       setStatus(`文件无效：${stringifyError(error)}`, "error");
@@ -96,18 +97,18 @@
 
   async function importState() {
     if (!pendingState) {
-      setStatus("请先选择状态文件。", "error");
+      setStatus("请先选择 Chrome Sync 文件。", "error");
       return;
     }
 
     const currentOrigin = format.normalizeOrigin(currentTab.url);
     const sourceOrigin = pendingState.metadata && pendingState.metadata.topOrigin;
     if (sourceOrigin && currentOrigin && sourceOrigin !== currentOrigin && !elements.allowOriginMismatch.checked) {
-      setStatus("来源 origin 与当前页面不同；确认需要跨站导入后再勾选允许。", "error");
+      setStatus("文件来源与当前页面不同；确认需要跨来源导入后再勾选允许。", "error");
       return;
     }
 
-    setBusy(true, "正在导入状态...");
+    setBusy(true, "正在导入登录状态...");
     clearReport();
     try {
       const response = await sendRuntimeMessage({
@@ -122,7 +123,7 @@
       if (!response.ok) {
         throw new Error(response.error || "导入失败。");
       }
-      renderReport("导入完成，刷新页面后验证登录态", response.result.report, response.result.summary);
+      renderReport("导入完成，刷新页面后验证登录状态", response.result.report, response.result.summary);
       setStatus("导入完成，请刷新当前页面。", "success");
     } catch (error) {
       setStatus(stringifyError(error), "error");
@@ -149,7 +150,9 @@
     const lines = [title, "", ...summaryItems(summary).map((item) => `${item.label}: ${item.value}`), ""];
     for (const key of ["cookies", "localStorage", "sessionStorage", "indexedDB", "cacheStorage"]) {
       const section = report[key] || {};
-      lines.push(`${key}: exported ${section.exported || 0}, imported ${section.imported || 0}, skipped ${section.skipped || 0}, failed ${section.failed || 0}`);
+      lines.push(
+        `${key}: exported ${section.exported || 0}, imported ${section.imported || 0}, skipped ${section.skipped || 0}, failed ${section.failed || 0}`,
+      );
       for (const error of section.errors || []) {
         lines.push(`  - ${error}`);
       }
@@ -177,9 +180,9 @@
     ];
   }
 
-  function downloadStateFile(state) {
-    const json = JSON.stringify(state, null, 2);
-    const blob = new Blob([json], { type: "application/json" });
+  async function downloadStatePackage(state, summary) {
+    const zipBytes = await packages.createZipPackage(state, summary);
+    const blob = new Blob([zipBytes], { type: "application/zip" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -200,7 +203,7 @@
       }
     })();
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    return `${host}-jarvis-login-state-${stamp}.json`;
+    return `${host}-${stamp}.jarvis-session-sync.zip`;
   }
 
   function sendRuntimeMessage(message) {
@@ -211,7 +214,7 @@
           resolve({ ok: false, error: lastError.message });
           return;
         }
-        resolve(response || { ok: false, error: "No response from extension background." });
+        resolve(response || { ok: false, error: "No response from Chrome Sync background." });
       });
     });
   }
@@ -267,13 +270,17 @@
   }
 
   function escapeHtml(value) {
-    return value.replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;",
-    }[char]));
+    return value.replace(
+      /[&<>"']/g,
+      (char) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#039;",
+        })[char],
+    );
   }
 
   function stringifyError(error) {

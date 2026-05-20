@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Login State Transfer</title>
+    <title>Chrome Sync</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main class="panel">
       <header class="header">
         <div>
-          <strong>登录态迁移</strong>
+          <strong>Chrome Sync</strong>
           <span id="browser-name">Chrome / Jarvis Browser</span>
         </div>
       </header>
@@ -21,9 +21,9 @@
       </section>
 
       <section class="actions">
-        <button id="export-state" class="primary" type="button">导出当前网站状态</button>
-        <label class="file-button" for="state-file">选择状态文件导入</label>
-        <input id="state-file" type="file" accept="application/json,.json" />
+        <button id="export-state" class="primary" type="button">导出当前标签</button>
+        <label class="file-button" for="state-file">选择文件导入</label>
+        <input id="state-file" type="file" accept=".jarvis-session-sync.zip,application/zip" />
       </section>
 
       <section id="preview" class="preview hidden">
@@ -38,20 +38,24 @@
         <div class="summary-grid" id="preview-summary"></div>
         <label class="check-row">
           <input id="clear-before-import" type="checkbox" checked />
-          <span>导入前清空当前 origin 的同类状态</span>
+          <span>清理后导入</span>
         </label>
         <label class="check-row warning">
           <input id="allow-origin-mismatch" type="checkbox" />
-          <span>允许导入到不同 origin</span>
+          <span>允许来源不一致</span>
         </label>
-        <button id="import-state" class="primary" type="button" disabled>导入到当前页面</button>
+        <button id="import-state" class="primary" type="button" disabled>导入登录状态</button>
       </section>
 
+      <section class="limits">
+        无法导出 HTTP auth cache、client cert、OS keychain、server device binding 等浏览器或系统绑定状态。
+      </section>
       <section id="status" class="status" aria-live="polite"></section>
       <section id="report" class="report hidden"></section>
     </main>
 
     <script src="state-format.js"></script>
+    <script src="package-format.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

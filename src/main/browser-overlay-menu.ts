@@ -6,6 +6,7 @@ export type BrowserOverlayAction =
   | "extensions"
   | "install-site-extension"
   | "downloads"
+  | "session-sync"
   | "settings"
   | "history"
   | "clear-browsing-data"
@@ -16,6 +17,7 @@ const browserOverlayActions = new Set<string>([
   "extensions",
   "install-site-extension",
   "downloads",
+  "session-sync",
   "settings",
   "history",
   "clear-browsing-data",
@@ -51,7 +53,7 @@ export function parseBrowserOverlayAction(value: string): BrowserOverlayAction {
 
 export function getToolOverlayHeight(model: BrowserOverlayMenuModel) {
   const rowCount = Math.max(1, model.items.length);
-  return Math.min(480, 82 + rowCount * 44 + (model.emptyText && !model.items.length ? 44 : 0));
+  return Math.min(480, 76 + rowCount * 42 + (model.emptyText && !model.items.length ? 44 : 0));
 }
 
 export function createExtensionMenuItems(input: {
@@ -107,6 +109,11 @@ export function createAppMenuItems() {
       id: "history",
       label: "历史记录",
       action: "history" as const,
+    },
+    {
+      id: "session-sync",
+      label: "导入/导出登录状态",
+      action: "session-sync" as const,
     },
     {
       id: "clear-browsing-data",

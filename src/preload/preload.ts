@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
+import type { AppApi, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -112,6 +112,12 @@ const appApi: AppApi = {
     stats: (input) => invoke<StoragePartitionStats[]>("storage:stats", input),
     clearData: (input) => invoke<StorageClearDataResult>("storage:clear-data", input),
   },
+  sessionSync: {
+    export: (input) => invoke("session-sync:export", input),
+    previewImport: (input) => invoke("session-sync:preview-import", input),
+    applyImport: (input) => invoke("session-sync:apply-import", input),
+    cancelImport: (importId) => invoke("session-sync:cancel-import", importId),
+  },
   settings: {
     get: () => invoke<DownloadSettings>("settings:get"),
     update: (input) => invoke("settings:update", input),
@@ -125,6 +131,7 @@ const appApi: AppApi = {
   onExtensionUpdated: (callback) => on<[string, SiteExtension[]]>("extension:updated", callback),
   onJarvisScriptUpdated: (callback) => on<[string | undefined, JarvisScript[]]>("jarvis-script:updated", callback),
   onJarvisScriptMessage: (callback) => on<[JarvisScriptMessage]>("jarvis-script:message", callback),
+  onOpenSessionSyncDialog: (callback) => on<[OpenSessionSyncDialogInput]>("session-sync:open-dialog", callback),
 };
 
 contextBridge.exposeInMainWorld("appApi", appApi);

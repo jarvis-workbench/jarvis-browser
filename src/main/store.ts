@@ -153,7 +153,7 @@ export class MetadataStore {
       await this.writeSiteExtensionsIndex(site);
       await this.writeSitesIndex();
     });
-    return structuredClone(site);
+    return toRendererSite(site);
   }
 
   async updateSite(siteId: string, input: { url?: string; title?: string }) {
@@ -172,11 +172,58 @@ export class MetadataStore {
 
     site.updatedAt = now();
     await this.persistSiteAndIndex(site);
-    return structuredClone(site);
+    return toRendererSite(site);
   }
 
   async updateSiteMetadata(siteId: string, input: { faviconUrl?: string; faviconPath?: string }) {
     const site = this.requireSite(siteId);
+
+    if (input.faviconUrl !== undefined) {
+      site.faviconUrl = input.faviconUrl;
+    }
+
+    if (input.faviconPath !== undefined) {
+      site.faviconPath = input.faviconPath;
+    }
+
+    site.updatedAt = now();
+    await this.persistSiteAndIndex(site);
+    return toRendererSite(site);
+  }
+
+  async importSiteMetadata(input: Site) {
+    const timestamp = now();
+    const site: Site = {
+      ...structuredClone(input),
+      id: input.id && !this.getSite(input.id) ? input.id : createId(),
+      sessions: [],
+      extensions: input.extensions ?? [],
+      jarvisScripts: input.jarvisScripts ?? [],
+      createdAt: input.createdAt || timestamp,
+      updatedAt: timestamp,
+    };
+
+    this.sites.push(site);
+    await this.enqueue(async () => {
+      await this.writeSite(site);
+      await this.writeSessionsIndex(site);
+      await this.writeSiteExtensionsIndex(site);
+      await this.writeSiteJarvisScriptsIndex(site);
+      await this.writeSitesIndex();
+    });
+    return structuredClone(site);
+  }
+
+  async updateImportedSiteMetadata(siteId: string, input: Partial<Pick<Site, "title" | "name" | "faviconUrl" | "faviconPath">>) {
+    const site = this.requireSite(siteId);
+
+    if (input.title !== undefined) {
+      site.title = input.title;
+    }
+
+    if (input.name !== undefined) {
+      site.name = input.name;
+    }
 
     if (input.faviconUrl !== undefined) {
       site.faviconUrl = input.faviconUrl;
@@ -194,14 +241,14 @@ export class MetadataStore {
   async fillMissingSiteTitle(siteId: string, title: string) {
     const site = this.requireSite(siteId);
     if (site.title.trim() || !title.trim()) {
-      return structuredClone(site);
+      return toRendererSite(site);
     }
 
     site.title = cleanText(title, "站点名称");
     site.name = site.title;
     site.updatedAt = now();
     await this.persistSiteAndIndex(site);
-    return structuredClone(site);
+    return toRendererSite(site);
   }
 
   async deleteSite(siteId: string) {
@@ -233,6 +280,36 @@ export class MetadataStore {
     };
 
     site.sessions.push(session);
+    site.updatedAt = timestamp;
+    await this.enqueue(async () => {
+      await this.writeSession(site, session);
+      await this.writeSite(site);
+      await this.writeSitesIndex();
+    });
+    return structuredClone(session);
+  }
+
+  async importSessionMetadata(siteId: string, input: SiteSession, options?: { targetSessionId?: string }) {
+    const site = this.requireSite(siteId);
+    const timestamp = now();
+    const existingSession = options?.targetSessionId
+      ? site.sessions.find((session) => session.id === options.targetSessionId)
+      : undefined;
+    const session: SiteSession = {
+      ...structuredClone(input),
+      id: existingSession?.id ?? (input.id || createId()),
+      siteId,
+      createdAt: existingSession?.createdAt ?? (input.createdAt || timestamp),
+      updatedAt: timestamp,
+    };
+
+    const existingIndex = site.sessions.findIndex((item) => item.id === session.id);
+    if (existingIndex >= 0) {
+      site.sessions[existingIndex] = session;
+    } else {
+      site.sessions.push(session);
+    }
+
     site.updatedAt = timestamp;
     await this.enqueue(async () => {
       await this.writeSession(site, session);
