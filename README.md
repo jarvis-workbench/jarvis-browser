@@ -213,7 +213,20 @@ persist:site-{siteId}-session-{sessionId}
 
 <br/>
 
-## Quick Start
+## Download
+
+Jarvis Browser provides preview builds on GitHub Releases:
+
+- [Latest release](https://github.com/jarvis-workbench/jarvis-browser/releases/latest)
+- [macOS Apple Silicon](https://github.com/jarvis-workbench/jarvis-browser/releases/download/v0.1.0/Jarvis-Browser-0.1.0-mac-arm64.dmg)
+- [macOS Intel](https://github.com/jarvis-workbench/jarvis-browser/releases/download/v0.1.0/Jarvis-Browser-0.1.0-mac-x64.dmg)
+- [Windows x64](https://github.com/jarvis-workbench/jarvis-browser/releases/download/v0.1.0/Jarvis-Browser-0.1.0-win-x64-setup.exe)
+
+The current release is an unsigned preview build. macOS or Windows may show a security warning during installation or first launch.
+
+<br/>
+
+## Development
 
 ### Prerequisites
 
@@ -221,7 +234,7 @@ persist:site-{siteId}-session-{sessionId}
 - npm 10+
 - macOS / Windows / Linux desktop environment with Electron support
 
-### Development
+### Run Locally
 
 ```bash
 # 克隆项目
@@ -253,21 +266,22 @@ npm run typecheck
 
 ### Release and Updates
 
-自动更新使用 `electron-builder` 生成发布产物和 `app-update.yml`，应用内更新只在已打包的 macOS / Windows 应用中生效；开发模式不会执行真实更新。
+Application updates are delivered through GitHub Releases. Packaged macOS and Windows builds can check for updates from `jarvis-browser://settings`; development mode does not perform real update checks.
+
+The update flow is user-confirmed:
+
+- Check for updates in Settings.
+- If a new version is available, click **Update** to download it.
+- After the download finishes, click **Restart to install**.
+
+Maintainer releases are built by GitHub Actions. Pushing a `v*` tag runs validation, builds macOS and Windows packages, and publishes the release assets:
 
 ```bash
-# 本地只打包不发布
-npm run dist:mac
-npm run dist:win
-
-# GitHub Actions 正式发布
 git tag v0.1.1
 git push origin v0.1.1
 ```
 
-GitHub Actions 会在 `v*` 标签推送时先运行 `npm ci`、`npm run typecheck` 和 `npm test`，再分别在 `macos-latest`、`windows-latest` 构建并发布到 GitHub Release。也可以手动运行 `Release` workflow：默认 `publish=false` 会 dry-run 打包并上传 artifacts；设为 `true` 时会发布到 GitHub Release。
-
-CI 当前设置了 `CSC_IDENTITY_AUTO_DISCOVERY=false`，因此默认产物是未签名构建。正式分发前仍需要补充 macOS Developer ID / notarization 和 Windows code signing 证书配置，否则系统安装或启动时可能显示安全提示。
+The project currently publishes unsigned preview builds. Signing and notarization can be added later when the distribution channel is ready for a signed release.
 
 <br/>
 
