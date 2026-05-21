@@ -118,8 +118,12 @@ async function createSessionForSettings(site: Site, name: string) {
 
   try {
     const session = await browser.addSessionToSite(site, sessionName);
-    await browser.openSessionFromSite(site, session);
     settingsDrawerVisible.value = false;
+    await nextTick();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await browser.openSessionFromSite(site, session);
     ElMessage.success('会话已创建');
   } catch (error) {
     ElMessage.error(formatError(error));

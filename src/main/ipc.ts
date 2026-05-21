@@ -19,15 +19,23 @@ export const registerIpc = (
   const sessionSyncManager = new SessionSyncManager(store, browserHost);
 
   ipcMain.handle("sites:list", invoke(() => store.listSites()));
-  ipcMain.handle("sites:add", (_event, input: Parameters<AppApi["sites"]["add"]>[0]) =>
-    store.addSite(input),
-  );
+  ipcMain.handle("sites:add", async (_event, input: Parameters<AppApi["sites"]["add"]>[0]) => {
+    const site = await store.addSite(input);
+    browserHost.emitSiteMetadataUpdated();
+    return site;
+  });
   ipcMain.handle(
     "sites:update",
-    (_event, siteId: string, input: Parameters<AppApi["sites"]["update"]>[1]) =>
-      store.updateSite(siteId, input),
+    async (_event, siteId: string, input: Parameters<AppApi["sites"]["update"]>[1]) => {
+      const site = await store.updateSite(siteId, input);
+      browserHost.emitSiteMetadataUpdated();
+      return site;
+    },
   );
-  ipcMain.handle("sites:delete", (_event, siteId: string) => store.deleteSite(siteId));
+  ipcMain.handle("sites:delete", async (_event, siteId: string) => {
+    await store.deleteSite(siteId);
+    browserHost.emitSiteMetadataUpdated();
+  });
   ipcMain.handle("sessions:list", (_event, siteId: string) => {
     const site = store.getSite(siteId);
     if (!site) {
@@ -36,15 +44,21 @@ export const registerIpc = (
 
     return store.listSites().find((item) => item.id === siteId)!.sessions;
   });
-  ipcMain.handle("sessions:add", (_event, siteId: string, input: { name: string }) =>
-    store.addSession(siteId, input),
-  );
-  ipcMain.handle("sessions:rename", (_event, siteId: string, sessionId: string, name: string) =>
-    store.renameSession(siteId, sessionId, name),
-  );
+  ipcMain.handle("sessions:add", async (_event, siteId: string, input: { name: string }) => {
+    const session = await store.addSession(siteId, input);
+    browserHost.emitSiteMetadataUpdated();
+    return session;
+  });
+  ipcMain.handle("sessions:rename", async (_event, siteId: string, sessionId: string, name: string) => {
+    const session = await store.renameSession(siteId, sessionId, name);
+    browserHost.emitSiteMetadataUpdated();
+    return session;
+  });
   ipcMain.handle("sessions:delete", async (_event, siteId: string, sessionId: string) => {
     await browserHost.closeSession(siteId, sessionId);
-    return store.deleteSession(siteId, sessionId);
+    const result = await store.deleteSession(siteId, sessionId);
+    browserHost.emitSiteMetadataUpdated();
+    return result;
   });
   ipcMain.handle(
     "sessions:clear-data",
