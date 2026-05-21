@@ -126,6 +126,7 @@ const appApi: AppApi = {
   updates: {
     getStatus: () => invoke<AppUpdateStatus>("updates:get-status"),
     checkForUpdates: () => invoke<AppUpdateStatus>("updates:check-for-updates"),
+    downloadUpdate: () => invoke<AppUpdateStatus>("updates:download-update"),
     quitAndInstall: () => invoke<AppUpdateStatus>("updates:quit-and-install"),
   },
   windowChrome,

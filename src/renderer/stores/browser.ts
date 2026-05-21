@@ -347,6 +347,12 @@ export const useBrowserStore = defineStore('browser', () => {
     return appUpdateStatus.value;
   }
 
+  async function downloadUpdate() {
+    appUpdateStatus.value = await window.appApi.updates.downloadUpdate();
+    statusMessage.value = updateStatusMessage(appUpdateStatus.value);
+    return appUpdateStatus.value;
+  }
+
   async function quitAndInstallUpdate() {
     appUpdateStatus.value = await window.appApi.updates.quitAndInstall();
     statusMessage.value = '正在重启安装更新';
@@ -706,6 +712,7 @@ export const useBrowserStore = defineStore('browser', () => {
     updateDownloadSettings,
     selectDownloadPath,
     checkForUpdates,
+    downloadUpdate,
     quitAndInstallUpdate,
     openSessionSyncDialog,
     closeSessionSyncDialog,
@@ -823,7 +830,7 @@ function updateStatusMessage(status: AppUpdateStatus) {
     idle: '更新就绪',
     unsupported: status.errorText || '当前环境不支持自动更新',
     checking: '正在检查更新',
-    available: '发现新版本，正在下载',
+    available: '发现新版本，等待确认下载',
     'not-available': '当前已是最新版本',
     downloading: '正在下载更新',
     downloaded: '更新已下载，等待重启安装',

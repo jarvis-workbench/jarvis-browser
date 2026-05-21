@@ -14,6 +14,7 @@ const canCheckForUpdates = computed(() => !['checking', 'downloading', 'installi
 const checkUpdateLabel = computed(() => (
   ['idle', 'unsupported'].includes(updateStatus.value.phase) ? '检查更新' : '重新检查'
 ));
+const canDownloadUpdate = computed(() => updateStatus.value.phase === 'available');
 const navItems: Array<{ pageId: BrowserInternalPageId; label: string; icon: typeof Download }> = [
   { pageId: 'settings', label: '下载内容', icon: Download },
   { pageId: 'downloads', label: '下载记录', icon: Download },
@@ -64,6 +65,14 @@ async function checkForUpdates() {
   }
 }
 
+async function downloadUpdate() {
+  try {
+    await browser.downloadUpdate();
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
 async function quitAndInstallUpdate() {
   try {
     await browser.quitAndInstallUpdate();
@@ -77,10 +86,10 @@ function updatePhaseText() {
     idle: '尚未检查更新',
     unsupported: updateStatus.value.errorText || '当前环境不支持自动更新',
     checking: '正在检查更新',
-    available: '发现新版本，正在自动下载',
+    available: '发现新版本，点击更新后开始下载',
     'not-available': '当前已是最新版本',
     downloading: '正在下载更新',
-    downloaded: '更新已下载，重启后安装',
+    downloaded: '更新已下载，点击重启安装后完成安装',
     installing: '正在重启安装',
     error: '更新检查失败',
   }[updateStatus.value.phase];
@@ -160,9 +169,30 @@ function formatError(error: unknown) {
               <span>{{ updatePhaseText() }}</span>
             </div>
             <div class="settings-row__control settings-row__control--actions">
-              <ElButton :disabled="!canCheckForUpdates" @click="checkForUpdates">
+              <ElButton
+                v-if="!['available', 'downloading', 'downloaded'].includes(updateStatus.phase)"
+                :disabled="!canCheckForUpdates"
+                @click="checkForUpdates"
+              >
                 <Download theme="outline" size="16" />
                 {{ checkUpdateLabel }}
+              </ElButton>
+              <ElButton
+                v-if="updateStatus.phase === 'available'"
+                type="primary"
+                :disabled="!canDownloadUpdate"
+                @click="downloadUpdate"
+              >
+                <Download theme="outline" size="16" />
+                更新
+              </ElButton>
+              <ElButton
+                v-if="updateStatus.phase === 'downloading'"
+                type="primary"
+                disabled
+              >
+                <Download theme="outline" size="16" />
+                下载中 {{ updateProgress }}%
               </ElButton>
               <ElButton
                 v-if="updateStatus.phase === 'downloaded'"

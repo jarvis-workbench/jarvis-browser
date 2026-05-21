@@ -6,9 +6,11 @@ const SUPPORTED_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "win32"]);
 
 export class UpdateManager {
   private status: AppUpdateStatus;
+  private isChecking = false;
+  private isDownloading = false;
 
   constructor(private readonly window: BrowserWindow) {
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
     this.status = this.createInitialStatus();
@@ -28,6 +30,11 @@ export class UpdateManager {
       return this.status;
     }
 
+    if (this.isChecking || this.status.phase === "downloading" || this.status.phase === "installing") {
+      return this.status;
+    }
+
+    this.isChecking = true;
     this.setStatus({
       phase: "checking",
       errorText: undefined,
@@ -41,6 +48,51 @@ export class UpdateManager {
         phase: "error",
         errorText: formatError(error),
       });
+    } finally {
+      this.isChecking = false;
+    }
+
+    return this.status;
+  }
+
+  async downloadUpdate() {
+    if (!this.canUseUpdater()) {
+      this.setStatus({
+        phase: "unsupported",
+        errorText: app.isPackaged ? "当前平台暂不支持自动更新" : "开发模式无法执行真实更新",
+      });
+      return this.status;
+    }
+
+    if (this.isDownloading || this.status.phase === "downloading" || this.status.phase === "downloaded") {
+      return this.status;
+    }
+
+    if (this.status.phase !== "available") {
+      throw new Error("暂无可下载的更新");
+    }
+
+    this.isDownloading = true;
+    this.setStatus({
+      phase: "downloading",
+      errorText: undefined,
+      progress: {
+        percent: 0,
+        transferred: 0,
+        total: 0,
+        bytesPerSecond: 0,
+      },
+    });
+
+    try {
+      await autoUpdater.downloadUpdate();
+    } catch (error) {
+      this.setStatus({
+        phase: "error",
+        errorText: formatError(error),
+      });
+    } finally {
+      this.isDownloading = false;
     }
 
     return this.status;
@@ -77,6 +129,7 @@ export class UpdateManager {
 
   private bindUpdaterEvents() {
     autoUpdater.on("update-available", (info) => {
+      this.isChecking = false;
       this.setStatus({
         ...this.infoToStatus(info),
         phase: "available",
@@ -85,6 +138,7 @@ export class UpdateManager {
     });
 
     autoUpdater.on("update-not-available", (info) => {
+      this.isChecking = false;
       this.setStatus({
         ...this.infoToStatus(info),
         phase: "not-available",
@@ -102,6 +156,7 @@ export class UpdateManager {
     });
 
     autoUpdater.on("update-downloaded", (info) => {
+      this.isDownloading = false;
       this.setStatus({
         ...this.infoToStatus(info),
         phase: "downloaded",
@@ -116,6 +171,8 @@ export class UpdateManager {
     });
 
     autoUpdater.on("error", (error) => {
+      this.isChecking = false;
+      this.isDownloading = false;
       this.setStatus({
         phase: "error",
         errorText: formatError(error),

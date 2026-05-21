@@ -573,6 +573,7 @@ export interface AppApi {
   updates: {
     getStatus(): Promise<AppUpdateStatus>;
     checkForUpdates(): Promise<AppUpdateStatus>;
+    downloadUpdate(): Promise<AppUpdateStatus>;
     quitAndInstall(): Promise<AppUpdateStatus>;
   };
   windowChrome: WindowChromeInfo;

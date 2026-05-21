@@ -254,5 +254,6 @@ export const registerIpc = (
   });
   ipcMain.handle("updates:get-status", invoke(() => updateManager.getStatus()));
   ipcMain.handle("updates:check-for-updates", invoke(() => updateManager.checkForUpdates()));
+  ipcMain.handle("updates:download-update", invoke(() => updateManager.downloadUpdate()));
   ipcMain.handle("updates:quit-and-install", invoke(() => updateManager.quitAndInstall()));
 };
