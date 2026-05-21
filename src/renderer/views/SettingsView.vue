@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Code, Download, FolderOpen, History, Plug, VacuumCleaner } from '@icon-park/vue-next';
 import { ElButton, ElInput, ElMessage, ElProgress, ElSwitch } from 'element-plus';
-import { computed, onMounted } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { BrowserInternalPageId } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
 
@@ -10,9 +10,21 @@ const browser = useBrowserStore();
 const settings = computed(() => browser.downloadSettings);
 const updateStatus = computed(() => browser.appUpdateStatus);
 const updateProgress = computed(() => Math.round(updateStatus.value.progress?.percent || 0));
-const canCheckForUpdates = computed(() => !['checking', 'downloading', 'installing'].includes(updateStatus.value.phase));
+const isCheckingForUpdates = ref(false);
+const isDownloadingUpdate = ref(false);
+const isInstallingUpdate = ref(false);
+const canCheckForUpdates = computed(() => ![
+  'unsupported',
+  'checking',
+  'downloading',
+  'installing',
+].includes(updateStatus.value.phase));
 const checkUpdateLabel = computed(() => (
-  ['idle', 'unsupported'].includes(updateStatus.value.phase) ? '检查更新' : '重新检查'
+  updateStatus.value.phase === 'unsupported'
+    ? '无法检查'
+    : ['idle'].includes(updateStatus.value.phase)
+      ? '检查更新'
+      : '重新检查'
 ));
 const canDownloadUpdate = computed(() => updateStatus.value.phase === 'available');
 const navItems: Array<{ pageId: BrowserInternalPageId; label: string; icon: typeof Download }> = [
@@ -58,26 +70,46 @@ async function updateAskBeforeDownload(value: string | number | boolean) {
 }
 
 async function checkForUpdates() {
+  if (!canCheckForUpdates.value) {
+    if (updateStatus.value.phase === 'unsupported') {
+      ElMessage.info(updateStatus.value.errorText || unsupportedUpdateText());
+    }
+    return;
+  }
+
   try {
+    isCheckingForUpdates.value = true;
     await browser.checkForUpdates();
   } catch (error) {
     ElMessage.error(formatError(error));
+  } finally {
+    isCheckingForUpdates.value = false;
   }
 }
 
 async function downloadUpdate() {
+  if (!canDownloadUpdate.value) {
+    ElMessage.info(updateStatus.value.errorText || '暂无可下载的更新');
+    return;
+  }
+
   try {
+    isDownloadingUpdate.value = true;
     await browser.downloadUpdate();
   } catch (error) {
     ElMessage.error(formatError(error));
+  } finally {
+    isDownloadingUpdate.value = false;
   }
 }
 
 async function quitAndInstallUpdate() {
   try {
+    isInstallingUpdate.value = true;
     await browser.quitAndInstallUpdate();
   } catch (error) {
     ElMessage.error(formatError(error));
+    isInstallingUpdate.value = false;
   }
 }
 
@@ -171,7 +203,8 @@ function formatError(error: unknown) {
             <div class="settings-row__control settings-row__control--actions">
               <ElButton
                 v-if="!['available', 'downloading', 'downloaded'].includes(updateStatus.phase)"
-                :disabled="!canCheckForUpdates"
+                :disabled="!canCheckForUpdates || isCheckingForUpdates"
+                :loading="isCheckingForUpdates"
                 @click="checkForUpdates"
               >
                 <Download theme="outline" size="16" />
@@ -180,7 +213,8 @@ function formatError(error: unknown) {
               <ElButton
                 v-if="updateStatus.phase === 'available'"
                 type="primary"
-                :disabled="!canDownloadUpdate"
+                :disabled="!canDownloadUpdate || isDownloadingUpdate"
+                :loading="isDownloadingUpdate"
                 @click="downloadUpdate"
               >
                 <Download theme="outline" size="16" />
@@ -197,6 +231,8 @@ function formatError(error: unknown) {
               <ElButton
                 v-if="updateStatus.phase === 'downloaded'"
                 type="primary"
+                :disabled="isInstallingUpdate"
+                :loading="isInstallingUpdate"
                 @click="quitAndInstallUpdate"
               >
                 <Download theme="outline" size="16" />
