@@ -1,0 +1,41 @@
+appId: com.jarvis-workbench.jarvis-browser
+productName: Jarvis Browser
+extraMetadata:
+  main: dist/main/main.js
+publish:
+  provider: github
+  owner: jarvis-workbench
+  repo: jarvis-browser
+files:
+  - dist/main/**
+  - dist/preload/**
+  - dist/renderer/**
+  - assets/**
+  - package.json
+extraResources:
+  - from: src/internal-pages
+    to: internal-pages
+directories:
+  output: release
+mac:
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+win:
+  artifactName: ${productName}-${version}-${os}-${arch}-setup.${ext}
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

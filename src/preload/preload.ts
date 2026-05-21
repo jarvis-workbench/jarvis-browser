@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
+import type { AppApi, AppUpdateStatus, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -123,6 +123,11 @@ const appApi: AppApi = {
     update: (input) => invoke("settings:update", input),
     selectDownloadPath: () => invoke("settings:select-download-path"),
   },
+  updates: {
+    getStatus: () => invoke<AppUpdateStatus>("updates:get-status"),
+    checkForUpdates: () => invoke<AppUpdateStatus>("updates:check-for-updates"),
+    quitAndInstall: () => invoke<AppUpdateStatus>("updates:quit-and-install"),
+  },
   windowChrome,
   onBrowserStateChanged: (callback) => on<[BrowserState]>("browser:state-changed", callback),
   onBrowserTabsChanged: (callback) => on<[{ activeTabId?: string; tabs: BrowserTab[] }]>("browser:tabs-changed", callback),
@@ -132,6 +137,7 @@ const appApi: AppApi = {
   onJarvisScriptUpdated: (callback) => on<[string | undefined, JarvisScript[]]>("jarvis-script:updated", callback),
   onJarvisScriptMessage: (callback) => on<[JarvisScriptMessage]>("jarvis-script:message", callback),
   onOpenSessionSyncDialog: (callback) => on<[OpenSessionSyncDialogInput]>("session-sync:open-dialog", callback),
+  onUpdateStatusChanged: (callback) => on<[AppUpdateStatus]>("updates:status-changed", callback),
 };
 
 contextBridge.exposeInMainWorld("appApi", appApi);

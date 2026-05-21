@@ -7,6 +7,7 @@ import { HistoryManager } from "./history-manager";
 import { SessionSyncManager } from "./session-sync-manager";
 import { StorageManager } from "./storage-manager";
 import { MetadataStore } from "./store";
+import { UpdateManager } from "./update-manager";
 
 const invoke = <T>(work: () => Promise<T> | T) => async () => work();
 
@@ -15,6 +16,7 @@ export const registerIpc = (
   browserHost: BrowserHost,
   historyManager: HistoryManager,
   storageManager: StorageManager,
+  updateManager: UpdateManager,
 ) => {
   const sessionSyncManager = new SessionSyncManager(store, browserHost);
 
@@ -250,4 +252,7 @@ export const registerIpc = (
     });
     return result.canceled ? undefined : result.filePaths[0];
   });
+  ipcMain.handle("updates:get-status", invoke(() => updateManager.getStatus()));
+  ipcMain.handle("updates:check-for-updates", invoke(() => updateManager.checkForUpdates()));
+  ipcMain.handle("updates:quit-and-install", invoke(() => updateManager.quitAndInstall()));
 };

@@ -226,6 +226,38 @@ export interface DownloadSettings {
   askWhereToSaveBeforeDownloading: boolean;
 }
 
+export type AppUpdatePhase =
+  | "idle"
+  | "unsupported"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "downloading"
+  | "downloaded"
+  | "installing"
+  | "error";
+
+export interface AppUpdateProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
+export interface AppUpdateStatus {
+  phase: AppUpdatePhase;
+  currentVersion: string;
+  availableVersion?: string;
+  releaseDate?: string;
+  releaseName?: string;
+  releaseNotes?: string;
+  progress?: AppUpdateProgress;
+  errorText?: string;
+  isPackaged: boolean;
+  platform: string;
+  updatedAt: string;
+}
+
 export interface HistoryRecord {
   id: string;
   tabId?: string;
@@ -538,6 +570,11 @@ export interface AppApi {
     update(input: Partial<DownloadSettings>): Promise<DownloadSettings>;
     selectDownloadPath(): Promise<string | undefined>;
   };
+  updates: {
+    getStatus(): Promise<AppUpdateStatus>;
+    checkForUpdates(): Promise<AppUpdateStatus>;
+    quitAndInstall(): Promise<AppUpdateStatus>;
+  };
   windowChrome: WindowChromeInfo;
   onBrowserStateChanged(callback: (state: BrowserState) => void): () => void;
   onBrowserTabsChanged(callback: (state: { activeTabId?: string; tabs: BrowserTab[] }) => void): () => void;
@@ -547,4 +584,5 @@ export interface AppApi {
   onJarvisScriptUpdated(callback: (siteId: string | undefined, scripts: JarvisScript[]) => void): () => void;
   onJarvisScriptMessage(callback: (message: JarvisScriptMessage) => void): () => void;
   onOpenSessionSyncDialog(callback: (input: OpenSessionSyncDialogInput) => void): () => void;
+  onUpdateStatusChanged(callback: (status: AppUpdateStatus) => void): () => void;
 }

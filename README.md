@@ -251,6 +251,24 @@ npm run typecheck
 
 当前项目以开发运行验证为主，不默认执行打包流程。
 
+### Release and Updates
+
+自动更新使用 `electron-builder` 生成发布产物和 `app-update.yml`，应用内更新只在已打包的 macOS / Windows 应用中生效；开发模式不会执行真实更新。
+
+```bash
+# 本地只打包不发布
+npm run dist:mac
+npm run dist:win
+
+# GitHub Actions 正式发布
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+GitHub Actions 会在 `v*` 标签推送时先运行 `npm ci`、`npm run typecheck` 和 `npm test`，再分别在 `macos-latest`、`windows-latest` 构建并发布到 GitHub Release。也可以手动运行 `Release` workflow：默认 `publish=false` 会 dry-run 打包并上传 artifacts；设为 `true` 时会发布到 GitHub Release。
+
+CI 当前设置了 `CSC_IDENTITY_AUTO_DISCOVERY=false`，因此默认产物是未签名构建。正式分发前仍需要补充 macOS Developer ID / notarization 和 Windows code signing 证书配置，否则系统安装或启动时可能显示安全提示。
+
 <br/>
 
 ## Core Concepts

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, nextTick, ref } from 'vue';
-import type { BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, OpenSessionSyncDialogInput, SessionSyncApplyImportInput, SessionSyncExportInput, SessionSyncPreviewImportInput, Site, SiteExtension, SiteSession } from '../../shared/types';
+import type { AppUpdateStatus, BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, OpenSessionSyncDialogInput, SessionSyncApplyImportInput, SessionSyncExportInput, SessionSyncPreviewImportInput, Site, SiteExtension, SiteSession } from '../../shared/types';
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
 import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
@@ -21,6 +21,13 @@ export const useBrowserStore = defineStore('browser', () => {
   const statusMessage = ref('准备就绪');
   const downloads = ref<DownloadState[]>([]);
   const downloadSettings = ref<DownloadSettings | null>(null);
+  const appUpdateStatus = ref<AppUpdateStatus>({
+    phase: 'idle',
+    currentVersion: '',
+    isPackaged: false,
+    platform: '',
+    updatedAt: '',
+  });
   const lastDownloadUpdatedAt = ref(0);
   const recentDownloadCount = ref(0);
   const sessionSyncDialog = ref<OpenSessionSyncDialogInput & { visible: boolean }>({
@@ -67,6 +74,10 @@ export const useBrowserStore = defineStore('browser', () => {
 
   async function loadSettings() {
     downloadSettings.value = await window.appApi.settings.get();
+  }
+
+  async function loadUpdateStatus() {
+    appUpdateStatus.value = await window.appApi.updates.getStatus();
   }
 
   async function addSite(rawUrl: string) {
@@ -167,6 +178,7 @@ export const useBrowserStore = defineStore('browser', () => {
       statusMessage.value = '下载内容';
     } else if (pageId === settingsTabId) {
       await loadSettings();
+      await loadUpdateStatus();
       statusMessage.value = '设置';
     } else {
       statusMessage.value = internalPageStatus(pageId);
@@ -327,6 +339,18 @@ export const useBrowserStore = defineStore('browser', () => {
   async function updateDownloadSettings(input: Partial<DownloadSettings>) {
     downloadSettings.value = await window.appApi.settings.update(input);
     return downloadSettings.value;
+  }
+
+  async function checkForUpdates() {
+    appUpdateStatus.value = await window.appApi.updates.checkForUpdates();
+    statusMessage.value = updateStatusMessage(appUpdateStatus.value);
+    return appUpdateStatus.value;
+  }
+
+  async function quitAndInstallUpdate() {
+    appUpdateStatus.value = await window.appApi.updates.quitAndInstall();
+    statusMessage.value = '正在重启安装更新';
+    return appUpdateStatus.value;
   }
 
   async function openExtensionPopup(extension: SiteExtension, anchor: BrowserRect) {
@@ -507,6 +531,10 @@ export const useBrowserStore = defineStore('browser', () => {
     const removeSessionSyncListener = window.appApi.onOpenSessionSyncDialog((input) => {
       void openSessionSyncDialog(input);
     });
+    const removeUpdateListener = window.appApi.onUpdateStatusChanged((status) => {
+      appUpdateStatus.value = status;
+      statusMessage.value = updateStatusMessage(status);
+    });
     void syncTabs();
 
     return () => {
@@ -518,6 +546,7 @@ export const useBrowserStore = defineStore('browser', () => {
       removeScriptMessageListener();
       removeDownloadListener();
       removeSessionSyncListener();
+      removeUpdateListener();
     };
   }
 
@@ -625,6 +654,7 @@ export const useBrowserStore = defineStore('browser', () => {
     statusMessage,
     downloads,
     downloadSettings,
+    appUpdateStatus,
     lastDownloadUpdatedAt,
     recentDownloadCount,
     sessionSyncDialog,
@@ -643,6 +673,7 @@ export const useBrowserStore = defineStore('browser', () => {
     loadSites,
     loadDownloads,
     loadSettings,
+    loadUpdateStatus,
     openSite,
     addSession,
     addSessionToSite,
@@ -674,6 +705,8 @@ export const useBrowserStore = defineStore('browser', () => {
     acknowledgeDownloads,
     updateDownloadSettings,
     selectDownloadPath,
+    checkForUpdates,
+    quitAndInstallUpdate,
     openSessionSyncDialog,
     closeSessionSyncDialog,
     exportSessionSync,
@@ -783,4 +816,18 @@ function internalPageStatus(pageId: BrowserInternalPageId) {
     history: '历史记录',
     'clear-browsing-data': '删除浏览数据',
   }[pageId];
+}
+
+function updateStatusMessage(status: AppUpdateStatus) {
+  return {
+    idle: '更新就绪',
+    unsupported: status.errorText || '当前环境不支持自动更新',
+    checking: '正在检查更新',
+    available: '发现新版本，正在下载',
+    'not-available': '当前已是最新版本',
+    downloading: '正在下载更新',
+    downloaded: '更新已下载，等待重启安装',
+    installing: '正在重启安装更新',
+    error: `更新失败：${status.errorText || '未知错误'}`,
+  }[status.phase];
 }

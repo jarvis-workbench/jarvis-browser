@@ -8,6 +8,7 @@ import { registerInternalProtocol } from "./internal-protocol";
 import { registerIpc } from "./ipc";
 import { StorageManager } from "./storage-manager";
 import { MetadataStore } from "./store";
+import { UpdateManager } from "./update-manager";
 
 const isDev = !app.isPackaged;
 const isMac = process.platform === "darwin";
@@ -19,6 +20,10 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | undefined;
 let isClosingMainWindow = false;
+
+if (isWin) {
+  app.setAppUserModelId("com.jarvis-workbench.jarvis-browser");
+}
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -87,8 +92,9 @@ const createWindow = async () => {
   });
 
   const browserHost = new BrowserHost(mainWindow, store, historyManager);
+  const updateManager = new UpdateManager(mainWindow);
   browserHost.bindDefaultDownloads();
-  registerIpc(store, browserHost, historyManager, storageManager);
+  registerIpc(store, browserHost, historyManager, storageManager, updateManager);
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (browserHost.handleBrowserShortcut(input)) {
       event.preventDefault();
