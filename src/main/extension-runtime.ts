@@ -1,10 +1,14 @@
 import { BrowserWindow, OpenDialogOptions, dialog } from "electron";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Site, SiteExtension } from "../shared/types";
+import { dataPaths } from "./data-paths";
 import { getDefaultProfileSession, getElectronSession } from "./electron-session-manager";
 import { createExtensionFromPath } from "./extension-manifest";
 import type { MetadataStore } from "./store";
 
 type BindSessionDownloads = (key: string, targetSession: Electron.Session) => void;
+const electronUnsupportedExtensionPermissions = new Set(["cookies", "webNavigation"]);
 
 export class ExtensionRuntime {
   constructor(
@@ -176,7 +180,7 @@ export class ExtensionRuntime {
     for (const siteSession of site.sessions) {
       const electronSession = getElectronSession(site.id, siteSession.id);
       this.bindSessionDownloads(`${site.id}:${siteSession.id}`, electronSession);
-      loaded = await electronSession.loadExtension(extension.path, { allowFileAccess: true });
+      loaded = await this.loadExtension(electronSession, extension);
     }
 
     if (!loaded) {
@@ -189,7 +193,7 @@ export class ExtensionRuntime {
   private async loadForDefaultProfile(extension: SiteExtension) {
     const electronSession = getDefaultProfileSession();
     this.bindSessionDownloads("default-profile", electronSession);
-    return electronSession.loadExtension(extension.path, { allowFileAccess: true });
+    return this.loadExtension(electronSession, extension);
   }
 
   private async loadForAllSites(extension: SiteExtension) {
@@ -199,6 +203,11 @@ export class ExtensionRuntime {
     }
 
     return loaded;
+  }
+
+  private async loadExtension(targetSession: Electron.Session, extension: SiteExtension) {
+    const loadPath = await prepareElectronExtensionLoadPath(extension);
+    return targetSession.extensions.loadExtension(loadPath, { allowFileAccess: true });
   }
 
   private async removeFromSite(site: Site, extensionId: string) {
@@ -230,4 +239,25 @@ export class ExtensionRuntime {
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function prepareElectronExtensionLoadPath(extension: SiteExtension) {
+  const manifest = JSON.parse(await readFile(join(extension.path, "manifest.json"), "utf8")) as {
+    permissions?: string[];
+  };
+  const permissions = manifest.permissions ?? [];
+  const filteredPermissions = permissions.filter((permission) => !electronUnsupportedExtensionPermissions.has(permission));
+  if (filteredPermissions.length === permissions.length) {
+    return extension.path;
+  }
+
+  const loadPath = join(dataPaths.runtime.extensionLoadRoot, extension.id);
+  await rm(loadPath, { recursive: true, force: true });
+  await mkdir(loadPath, { recursive: true });
+  await cp(extension.path, loadPath, { recursive: true });
+  await writeFile(
+    join(loadPath, "manifest.json"),
+    JSON.stringify({ ...manifest, permissions: filteredPermissions }, null, 2),
+  );
+  return loadPath;
 }

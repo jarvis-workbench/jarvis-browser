@@ -34,6 +34,11 @@ export const registerIpc = (
       return site;
     },
   );
+  ipcMain.handle("sites:reorder", async (_event, siteIds: string[]) => {
+    const sites = await store.reorderSites(siteIds);
+    browserHost.emitSiteMetadataUpdated();
+    return sites;
+  });
   ipcMain.handle("sites:delete", async (_event, siteId: string) => {
     await store.deleteSite(siteId);
     browserHost.emitSiteMetadataUpdated();
@@ -102,6 +107,7 @@ export const registerIpc = (
   );
   ipcMain.handle("browser:list-tabs", () => browserHost.listTabs());
   ipcMain.handle("browser:activate-tab", (_event, tabId: string) => browserHost.activateTab(tabId));
+  ipcMain.handle("browser:reorder-tabs", (_event, tabIds: string[]) => browserHost.reorderTabs(tabIds));
   ipcMain.handle("browser:close-tab", (_event, tabId: string) => browserHost.closeTab(tabId));
   ipcMain.handle("browser:navigate-tab", (_event, tabId: string, url: string) => browserHost.navigateTab(tabId, url));
   ipcMain.handle("browser:navigate", (_event, url: string) => browserHost.navigate(url));

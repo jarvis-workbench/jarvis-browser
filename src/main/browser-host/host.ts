@@ -112,9 +112,11 @@ export class BrowserHost {
 
   async createTab(input: { url?: string; openerTabId?: string } = {}) {
     const opener = input.openerTabId ? this.tabs.get(input.openerTabId) : undefined;
+    const openerSiteId = opener?.siteId;
+    const openerSessionId = opener?.sessionId;
     const partition = opener?.partition ?? createDefaultProfilePartition();
-    const targetSession = opener?.siteId && opener.sessionId
-      ? getElectronSession(opener.siteId, opener.sessionId)
+    const targetSession = openerSiteId && openerSessionId
+      ? getElectronSession(openerSiteId, openerSessionId)
       : electronSession.fromPartition(partition);
     const navigationTarget = input.url ? resolveNavigationTarget(input.url) : undefined;
     if (navigationTarget?.kind === "external") {
@@ -126,14 +128,16 @@ export class BrowserHost {
     }
 
     const url = navigationTarget?.url ?? internalPageUrls.newtab;
-    const kind: BrowserTabKind = input.url ? "default" : "internal";
+    const isSessionChildTab = Boolean(input.url && openerSiteId && openerSessionId);
+    const kind: BrowserTabKind = isSessionChildTab ? "site" : input.url ? "default" : "internal";
     const tab = this.createTabRecord({
       kind,
       url,
       title: kind === "internal" ? "新标签页" : "新标签",
       partition,
-      siteId: opener?.siteId,
-      sessionId: opener?.sessionId,
+      siteId: openerSiteId,
+      sessionId: openerSessionId,
+      parentTabId: isSessionChildTab ? opener?.id : undefined,
       openerTabId: input.openerTabId,
       internalPageId: kind === "internal" ? "newtab" : undefined,
     });
@@ -142,9 +146,15 @@ export class BrowserHost {
       await this.extensionRuntime.loadEnabledForDefaultProfile();
       await this.jarvisScriptRuntime.refreshUserScriptWorkers();
     }
+    if (isSessionChildTab && openerSiteId) {
+      const site = this.store.getSite(openerSiteId);
+      if (site) {
+        this.runViewTask(tab.id, this.extensionRuntime.loadEnabledForSite(site));
+      }
+    }
     await this.createViewForTab(tab, targetSession);
-    await this.activateTab(tab.id, { emitTabs: false });
     await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
+    await this.activateTab(tab.id, { emitTabs: false });
     this.emitTabsChanged();
     return structuredClone(tab);
   }
@@ -212,6 +222,33 @@ export class BrowserHost {
       activeTabId: this.activeTabId,
       tabs: [...this.tabs.values()].map((tab) => structuredClone(tab)),
     };
+  }
+
+  reorderTabs(tabIds: string[]) {
+    const requested = tabIds.filter((tabId) => this.tabs.has(tabId));
+    if (!requested.length) {
+      return;
+    }
+
+    const requestedIds = new Set(requested);
+    const nextTabs = new Map<string, BrowserTab>();
+    for (const tabId of requested) {
+      const tab = this.tabs.get(tabId);
+      if (tab) {
+        nextTabs.set(tabId, tab);
+      }
+    }
+    for (const [tabId, tab] of this.tabs) {
+      if (!requestedIds.has(tabId)) {
+        nextTabs.set(tabId, tab);
+      }
+    }
+
+    this.tabs.clear();
+    for (const [tabId, tab] of nextTabs) {
+      this.tabs.set(tabId, tab);
+    }
+    this.emitTabsChanged();
   }
 
   async activateTab(tabId: string, options: { emitTabs?: boolean } = {}) {
@@ -790,6 +827,7 @@ export class BrowserHost {
     siteId?: string;
     sessionId?: string;
     partition: string;
+    parentTabId?: string;
     openerTabId?: string;
     internalPageId?: BrowserInternalPageId;
   }) {
@@ -803,6 +841,7 @@ export class BrowserHost {
       siteId: input.siteId,
       sessionId: input.sessionId,
       partition: input.partition,
+      parentTabId: input.parentTabId,
       openerTabId: input.openerTabId,
       internalPageId: input.internalPageId,
       pinnedExtensionIds: [],

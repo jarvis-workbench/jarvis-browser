@@ -34,6 +34,8 @@ import {
   settingsTabId,
   type TopLevelTab,
   type InternalPageTabId,
+  type SiteSessionGroup,
+  type SiteSessionTab,
 } from '../stores/browser-tabs';
 import { useBrowserStore } from '../stores/browser';
 
@@ -51,6 +53,8 @@ const nowTick = ref(Date.now());
 
 let resizeObserver: ResizeObserver | undefined;
 let downloadActivityTimer: number | undefined;
+let pendingDragOrderKey = '';
+let activeDragPayload: TabDragPayload | null = null;
 
 const selectedUrl = computed(() => browser.browserState.displayUrl || browser.browserState.url || browser.selectedSite?.url || '');
 const displayedAddress = computed(() => {
@@ -66,10 +70,13 @@ const isDownloadsActive = computed(() => activeTab.value?.internalPageId === bro
 const isSettingsActive = computed(() => activeTab.value?.internalPageId === browser.settingsTabId);
 const isInternalPageActive = computed(() => activeTab.value?.kind === 'internal');
 const currentSessionName = computed(() => (
-  activeTab.value?.kind === 'site' ? browser.selectedSession?.name ?? '' : ''
+  activeTab.value?.siteId && activeTab.value.sessionId ? browser.selectedSession?.name ?? '' : ''
 ));
-const activeSiteSessionTabs = computed(() => browser.activeSiteSessionTabs);
+const activeSiteSessionGroups = computed(() => browser.activeSiteSessionGroups);
+const activeSessionPageTabs = computed(() => browser.activeSessionPageTabs);
 const topLevelTabs = computed(() => browser.topLevelTabs);
+const hasSessionTabs = computed(() => activeSiteSessionGroups.value.length > 0);
+const hasPageTabs = computed(() => activeSessionPageTabs.value.length > 1);
 const browserInsetLeft = computed(() => 0);
 const browserInsetRight = computed(() => {
   if (isInternalPageActive.value) {
@@ -170,13 +177,17 @@ function tabTitle(tab: { id: string; title: string; url: string }) {
   return browser.getTabState(tab.id)?.title || tab.title || tab.url;
 }
 
-function sessionTabTitle(tab: { id: string; url: string; session: SiteSession }) {
+function sessionGroupTitle(group: SiteSessionGroup) {
+  return group.session.name;
+}
+
+function pageTabTitle(tab: SiteSessionTab) {
   const stateTitle = browser.getTabState(tab.id)?.title?.trim();
-  if (stateTitle && stateTitle !== tab.session.name) {
+  if (stateTitle) {
     return stateTitle;
   }
 
-  return tab.url;
+  return tab.title || tab.url;
 }
 
 function topLevelTabTitle(tab: TopLevelTab) {
@@ -314,6 +325,10 @@ async function activateTopLevelTab(tab: TopLevelTab) {
   await activateBrowserTab(tab.type === 'site' ? tab.activeSessionTab.id : tab.tab.id);
 }
 
+async function activateSessionGroup(group: SiteSessionGroup) {
+  await activateBrowserTab(group.activeTab.id);
+}
+
 async function closeBrowserTab(tabId: string) {
   await window.appApi.browser.closeTab(tabId);
   browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
@@ -325,10 +340,119 @@ async function closeTopLevelTab(tab: TopLevelTab) {
     return;
   }
 
-  for (const sessionTab of tab.tabs) {
-    await window.appApi.browser.closeTab(sessionTab.id);
+  for (const sessionTab of siteTopLevelTabIds(tab)) {
+    await window.appApi.browser.closeTab(sessionTab);
   }
   browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+}
+
+async function closeSessionGroup(group: SiteSessionGroup) {
+  for (const tab of group.tabs) {
+    await window.appApi.browser.closeTab(tab.id);
+  }
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+}
+
+type DragLayer = 'top' | 'session' | 'page';
+type TabDragPayload = {
+  layer: DragLayer;
+  tabIds: string[];
+};
+
+function tabDragPayload(layer: DragLayer, tabIds: string[]): string {
+  return JSON.stringify({ layer, tabIds } satisfies TabDragPayload);
+}
+
+function startTabDrag(event: DragEvent, layer: DragLayer, tabIds: string[]) {
+  if (!event.dataTransfer || !tabIds.length) {
+    return;
+  }
+
+  activeDragPayload = { layer, tabIds };
+  pendingDragOrderKey = '';
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('application/x-jarvis-tabs', tabDragPayload(layer, tabIds));
+}
+
+function endTabDrag() {
+  activeDragPayload = null;
+  pendingDragOrderKey = '';
+}
+
+function startTopLevelDrag(event: DragEvent, tab: TopLevelTab) {
+  startTabDrag(event, 'top', tab.type === 'site' ? siteTopLevelTabIds(tab) : [tab.tab.id]);
+}
+
+function startSessionGroupDrag(event: DragEvent, group: SiteSessionGroup) {
+  startTabDrag(event, 'session', group.tabs.map((tab) => tab.id));
+}
+
+function startPageTabDrag(event: DragEvent, tab: SiteSessionTab) {
+  startTabDrag(event, 'page', [tab.id]);
+}
+
+async function dropTopLevelTab(event: DragEvent, target: TopLevelTab) {
+  event.preventDefault();
+  endTabDrag();
+}
+
+async function dropSessionGroup(event: DragEvent, target: SiteSessionGroup) {
+  event.preventDefault();
+  endTabDrag();
+}
+
+async function dropPageTab(event: DragEvent, target: SiteSessionTab) {
+  event.preventDefault();
+  endTabDrag();
+}
+
+async function reorderDraggedTabs(event: DragEvent, layer: DragLayer, targetTabIds: string[]) {
+  event.preventDefault();
+  const draggedTabIds = activeDragPayload?.layer === layer ? activeDragPayload.tabIds : null;
+  if (!draggedTabIds || !targetTabIds.length || targetTabIds.some((tabId) => draggedTabIds.includes(tabId))) {
+    return;
+  }
+
+  const targetElement = event.currentTarget as HTMLElement | null;
+  const targetRect = targetElement?.getBoundingClientRect();
+  const placement = targetRect && event.clientX > targetRect.left + targetRect.width / 2 ? 'after' : 'before';
+  const nextOrder = moveTabIds(browser.openTabs.map((tab) => tab.id), draggedTabIds, targetTabIds, placement);
+  if (!nextOrder) {
+    return;
+  }
+
+  const orderKey = nextOrder.join('|');
+  if (orderKey === pendingDragOrderKey) {
+    return;
+  }
+
+  pendingDragOrderKey = orderKey;
+  await window.appApi.browser.reorderTabs(nextOrder);
+}
+
+function siteTopLevelTabIds(tab: Extract<TopLevelTab, { type: 'site' }>) {
+  return tab.sessionGroups.flatMap((group) => group.tabs.map((sessionTab) => sessionTab.id));
+}
+
+function moveTabIds(order: string[], movingIds: string[], targetIds: string[], placement: 'before' | 'after') {
+  const movingSet = new Set(movingIds);
+  const remaining = order.filter((tabId) => !movingSet.has(tabId));
+  const targetIndexes = targetIds
+    .map((tabId) => remaining.indexOf(tabId))
+    .filter((index) => index >= 0);
+  if (!targetIndexes.length) {
+    return null;
+  }
+  const targetIndex = placement === 'after'
+    ? Math.max(...targetIndexes) + 1
+    : Math.min(...targetIndexes);
+
+  const next = [
+    ...remaining.slice(0, targetIndex),
+    ...movingIds,
+    ...remaining.slice(targetIndex),
+  ];
+  return next.every((tabId, index) => tabId === order[index]) ? null : next;
 }
 
 async function openCurrentSessionCreator(site?: Site) {
@@ -381,7 +505,13 @@ watch(
 
 <template>
   <main class="chrome-shell">
-    <section class="chrome-top" :class="{ 'chrome-top--with-session-tabs': activeSiteSessionTabs.length }">
+    <section
+      class="chrome-top"
+      :class="{
+        'chrome-top--with-session-tabs': hasSessionTabs,
+        'chrome-top--with-page-tabs': hasPageTabs,
+      }"
+    >
       <div class="chrome-tabs" aria-label="标签栏">
         <button
           v-for="tab in topLevelTabs"
@@ -394,7 +524,12 @@ watch(
             'chrome-tab--site-container': tab.type === 'site',
           }"
           type="button"
+          draggable="true"
           @click="activateTopLevelTab(tab)"
+          @dragstart="startTopLevelDrag($event, tab)"
+          @dragend="endTabDrag"
+          @dragover="reorderDraggedTabs($event, 'top', tab.type === 'site' ? siteTopLevelTabIds(tab) : [tab.tab.id])"
+          @drop="dropTopLevelTab($event, tab)"
         >
           <Loading
             v-if="isTopLevelTabLoading(tab)"
@@ -428,30 +563,68 @@ watch(
         </button>
       </div>
 
-      <div v-if="activeSiteSessionTabs.length" class="chrome-session-tabs" aria-label="会话标签栏">
+      <div v-if="hasSessionTabs" class="chrome-session-tabs" aria-label="会话标签栏">
         <button
-          v-for="tab in activeSiteSessionTabs"
-          :key="tab.id"
+          v-for="group in activeSiteSessionGroups"
+          :key="group.key"
           class="chrome-session-tab"
           :class="{
-            'chrome-session-tab--active': tab.id === browser.activeTabId,
-            'chrome-session-tab--loading': isTabLoading(tab.id),
+            'chrome-session-tab--active': group.session.id === browser.selectedSessionId,
+            'chrome-session-tab--loading': isTabLoading(group.activeTab.id),
           }"
           type="button"
-          @click="activateBrowserTab(tab.id)"
+          draggable="true"
+          @click="activateSessionGroup(group)"
+          @dragstart="startSessionGroupDrag($event, group)"
+          @dragend="endTabDrag"
+          @dragover="reorderDraggedTabs($event, 'session', group.tabs.map((tab) => tab.id))"
+          @drop="dropSessionGroup($event, group)"
         >
           <Loading
-            v-if="isTabLoading(tab.id)"
+            v-if="isTabLoading(group.activeTab.id)"
             class="chrome-session-tab__loading"
             theme="outline"
             size="13"
           />
           <span v-else class="chrome-session-tab__icon">
-            <img v-if="browser.siteIconSrc(tab.site) || tabFaviconSrc(tab)" :src="browser.siteIconSrc(tab.site) || tabFaviconSrc(tab)" alt="" />
-            <span v-else>{{ browser.siteInitial(tab.site) }}</span>
+            <img v-if="browser.siteIconSrc(group.site) || tabFaviconSrc(group.activeTab)" :src="browser.siteIconSrc(group.site) || tabFaviconSrc(group.activeTab)" alt="" />
+            <span v-else>{{ browser.siteInitial(group.site) }}</span>
           </span>
-          <span class="chrome-session-tab__title">{{ sessionTabTitle(tab) }}</span>
-          <Close class="chrome-session-tab__close" theme="outline" size="12" @click.stop="closeBrowserTab(tab.id)" />
+          <span class="chrome-session-tab__title">{{ sessionGroupTitle(group) }}</span>
+          <span v-if="group.tabs.length > 1" class="chrome-session-tab__count">{{ group.tabs.length }}</span>
+          <Close class="chrome-session-tab__close" theme="outline" size="12" @click.stop="closeSessionGroup(group)" />
+        </button>
+      </div>
+
+      <div v-if="hasPageTabs" class="chrome-page-tabs" aria-label="会话内标签栏">
+        <button
+          v-for="tab in activeSessionPageTabs"
+          :key="tab.id"
+          class="chrome-page-tab"
+          :class="{
+            'chrome-page-tab--active': tab.id === browser.activeTabId,
+            'chrome-page-tab--loading': isTabLoading(tab.id),
+          }"
+          type="button"
+          draggable="true"
+          @click="activateBrowserTab(tab.id)"
+          @dragstart="startPageTabDrag($event, tab)"
+          @dragend="endTabDrag"
+          @dragover="reorderDraggedTabs($event, 'page', [tab.id])"
+          @drop="dropPageTab($event, tab)"
+        >
+          <Loading
+            v-if="isTabLoading(tab.id)"
+            class="chrome-page-tab__loading"
+            theme="outline"
+            size="12"
+          />
+          <span v-else class="chrome-page-tab__icon">
+            <img v-if="tabFaviconSrc(tab)" :src="tabFaviconSrc(tab)" alt="" />
+            <span v-else>{{ pageTabTitle(tab).trim().slice(0, 1).toUpperCase() }}</span>
+          </span>
+          <span class="chrome-page-tab__title">{{ pageTabTitle(tab) }}</span>
+          <Close class="chrome-page-tab__close" theme="outline" size="12" @click.stop="closeBrowserTab(tab.id)" />
         </button>
       </div>
 
@@ -596,6 +769,10 @@ watch(
   grid-template-rows: var(--titlebar-height) 34px 48px;
 }
 
+.chrome-top--with-session-tabs.chrome-top--with-page-tabs {
+  grid-template-rows: var(--titlebar-height) 34px 30px 48px;
+}
+
 .chrome-toolbar {
   grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
 }
@@ -646,26 +823,33 @@ watch(
   min-width: 0;
   align-items: center;
   gap: 4px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   border-top: 1px solid rgba(60, 64, 67, 0.08);
   padding: 3px 10px;
-  background: #eef1f5;
+  background: #eef2f7;
   -webkit-app-region: drag;
+  scrollbar-width: none;
+}
+
+.chrome-session-tabs::-webkit-scrollbar,
+.chrome-page-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .chrome-session-tab {
-  display: grid;
-  width: 168px;
-  min-width: 92px;
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
   max-width: 188px;
   height: 28px;
-  grid-template-columns: auto minmax(0, 1fr) 18px;
   align-items: center;
   gap: 6px;
-  border: 0;
+  flex: 0 0 auto;
+  border: 1px solid rgba(130, 143, 165, 0.32);
   border-radius: 7px;
   padding: 0 8px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.48);
   color: #3c4043;
   text-align: left;
   -webkit-app-region: no-drag;
@@ -677,6 +861,7 @@ watch(
 
 .chrome-session-tab--active {
   background: #ffffff;
+  border-color: rgba(82, 132, 219, 0.35);
   box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
 }
 
@@ -708,9 +893,24 @@ watch(
 
 .chrome-session-tab__title {
   overflow: hidden;
+  max-width: 126px;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chrome-session-tab__count {
+  display: inline-flex;
+  min-width: 17px;
+  height: 17px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 5px;
+  background: #dfe7f5;
+  color: #4b5568;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .chrome-session-tab__close {
@@ -725,6 +925,95 @@ watch(
 
 .chrome-session-tab__close:hover {
   background: #e8eaed;
+}
+
+.chrome-page-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-top: 1px solid rgba(60, 64, 67, 0.08);
+  padding: 3px 10px;
+  background: #f6f8fb;
+  -webkit-app-region: drag;
+  scrollbar-width: none;
+}
+
+.chrome-page-tab {
+  display: inline-flex;
+  width: auto;
+  min-width: 0;
+  max-width: 210px;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 7px;
+  background: transparent;
+  color: #4b5568;
+  text-align: left;
+  -webkit-app-region: no-drag;
+}
+
+.chrome-page-tab:hover {
+  background: rgba(60, 64, 67, 0.08);
+}
+
+.chrome-page-tab--active {
+  background: #e9eef7;
+  color: #202124;
+}
+
+.chrome-page-tab__loading {
+  color: #5f6368;
+  animation: tab-loading-spin 850ms linear infinite;
+}
+
+.chrome-page-tab__icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #647086;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.chrome-page-tab__icon img {
+  width: 12px;
+  height: 12px;
+  object-fit: contain;
+}
+
+.chrome-page-tab__title {
+  overflow: hidden;
+  max-width: 150px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chrome-page-tab__close {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #667085;
+}
+
+.chrome-page-tab__close:hover {
+  background: #dfe4ec;
 }
 
 .chrome-toolbar .chrome-toolbar-button--active,

@@ -33,11 +33,20 @@ export type SiteSessionTab = BrowserTab & {
   session: SiteSession;
 };
 
+export type SiteSessionGroup = {
+  key: string;
+  site: Site;
+  session: SiteSession;
+  tabs: SiteSessionTab[];
+  activeTab: SiteSessionTab;
+};
+
 export type SiteTopLevelTab = {
   type: 'site';
   key: string;
   site: Site;
-  tabs: SiteSessionTab[];
+  sessionGroups: SiteSessionGroup[];
+  activeSessionGroup: SiteSessionGroup;
   activeSessionTab: SiteSessionTab;
 };
 
@@ -49,6 +58,7 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
   const tabsById = ref<Record<string, BrowserTab>>({});
   const statesByTabId = ref<Record<string, BrowserState>>({});
   const lastActiveTabIdBySiteId = ref<Record<string, string>>({});
+  const lastActiveTabIdBySessionKey = ref<Record<string, string>>({});
 
   const sitesById = computed(() => new Map(sites.value.map((site) => [site.id, site])));
   const openTabs = computed(() => tabOrder.value.map((tabId) => tabsById.value[tabId]).filter(Boolean));
@@ -61,10 +71,15 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
   );
   const selectedSiteId = computed(() => selectedTab.value?.siteId ?? null);
   const selectedSessionId = computed(() => selectedTab.value?.sessionId ?? null);
+  const selectedSessionKey = computed(() => (
+    selectedTab.value?.siteId && selectedTab.value.sessionId
+      ? toSessionKey(selectedTab.value.siteId, selectedTab.value.sessionId)
+      : null
+  ));
   const openInternalTabs = computed(() => openTabs.value.filter((tab) => tab.kind === 'internal'));
   const openSessionTabs = computed(() =>
     openTabs.value
-      .filter((tab) => tab.kind === 'site')
+      .filter((tab) => tab.kind !== 'internal' && tab.siteId && tab.sessionId)
       .map((tab) => {
         const site = tab.siteId ? sitesById.value.get(tab.siteId) : undefined;
         const session = site?.sessions.find((item) => item.id === tab.sessionId);
@@ -72,17 +87,13 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
       })
       .filter((tab): tab is SiteSessionTab => Boolean(tab)),
   );
-  const activeSiteSessionTabs = computed(() => {
-    const siteId = selectedTab.value?.siteId;
-    return siteId ? openSessionTabs.value.filter((tab) => tab.siteId === siteId) : [];
-  });
   const topLevelTabs = computed<TopLevelTab[]>(() => {
     const topTabs: TopLevelTab[] = [];
     const siteGroups = new Map<string, SiteTopLevelTab>();
     const sessionTabsById = new Map(openSessionTabs.value.map((tab) => [tab.id, tab]));
 
     for (const tab of openTabs.value) {
-      if (tab.kind !== 'site' || !tab.siteId) {
+      if (tab.kind === 'internal' || !tab.siteId || !tab.sessionId) {
         topTabs.push({
           type: 'direct',
           key: tab.id,
@@ -96,23 +107,47 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
         continue;
       }
 
-      let group = siteGroups.get(siteTab.site.id);
-      if (!group) {
-        group = {
+      let siteGroup = siteGroups.get(siteTab.site.id);
+      if (!siteGroup) {
+        const sessionGroup = createSessionGroup(siteTab);
+        siteGroup = {
           type: 'site',
           key: `site:${siteTab.site.id}`,
           site: siteTab.site,
-          tabs: [],
-          activeSessionTab: siteTab,
+          sessionGroups: [sessionGroup],
+          activeSessionGroup: sessionGroup,
+          activeSessionTab: sessionGroup.activeTab,
         };
-        siteGroups.set(siteTab.site.id, group);
-        topTabs.push(group);
+        siteGroups.set(siteTab.site.id, siteGroup);
+        topTabs.push(siteGroup);
+        continue;
       }
-      group.tabs.push(siteTab);
-      group.activeSessionTab = resolveActiveSessionTab(siteTab.site.id, group.tabs);
+
+      let sessionGroup = siteGroup.sessionGroups.find((group) => group.session.id === siteTab.session.id);
+      if (!sessionGroup) {
+        sessionGroup = createSessionGroup(siteTab);
+        siteGroup.sessionGroups.push(sessionGroup);
+      } else {
+        sessionGroup.tabs.push(siteTab);
+      }
+      syncSiteGroupActiveTab(siteGroup);
     }
 
     return topTabs;
+  });
+  const activeSiteSessionGroups = computed(() => {
+    const siteId = selectedTab.value?.siteId;
+    return siteId ? topLevelTabs.value.find((tab): tab is SiteTopLevelTab =>
+      tab.type === 'site' && tab.site.id === siteId,
+    )?.sessionGroups ?? [] : [];
+  });
+  const activeSessionPageTabs = computed(() => {
+    const sessionKey = selectedSessionKey.value;
+    if (!sessionKey) {
+      return [];
+    }
+
+    return activeSiteSessionGroups.value.find((group) => group.key === sessionKey)?.tabs ?? [];
   });
 
   function syncTabs(state: { activeTabId?: string; tabs: BrowserTab[] }) {
@@ -134,6 +169,12 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
         [activeTab.siteId]: activeTab.id,
       };
     }
+    if (activeTab?.siteId && activeTab.sessionId) {
+      lastActiveTabIdBySessionKey.value = {
+        ...lastActiveTabIdBySessionKey.value,
+        [toSessionKey(activeTab.siteId, activeTab.sessionId)]: activeTab.id,
+      };
+    }
   }
 
   function resetTabs() {
@@ -142,6 +183,7 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     tabsById.value = {};
     statesByTabId.value = {};
     lastActiveTabIdBySiteId.value = {};
+    lastActiveTabIdBySessionKey.value = {};
   }
 
   function setTabState(state: BrowserState) {
@@ -195,27 +237,69 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
       statesByTabId.value = nextStates;
     }
 
-    const nextLastActive = { ...lastActiveTabIdBySiteId.value };
-    let lastActiveChanged = false;
-    for (const [siteId, tabId] of Object.entries(nextLastActive)) {
+    const nextLastActiveBySite = { ...lastActiveTabIdBySiteId.value };
+    let lastActiveBySiteChanged = false;
+    for (const [siteId, tabId] of Object.entries(nextLastActiveBySite)) {
       if (!openTabIds.has(tabId)) {
-        delete nextLastActive[siteId];
-        lastActiveChanged = true;
+        delete nextLastActiveBySite[siteId];
+        lastActiveBySiteChanged = true;
       }
     }
-    if (lastActiveChanged) {
-      lastActiveTabIdBySiteId.value = nextLastActive;
+    if (lastActiveBySiteChanged) {
+      lastActiveTabIdBySiteId.value = nextLastActiveBySite;
+    }
+
+    const nextLastActiveBySession = { ...lastActiveTabIdBySessionKey.value };
+    let lastActiveBySessionChanged = false;
+    for (const [sessionKey, tabId] of Object.entries(nextLastActiveBySession)) {
+      if (!openTabIds.has(tabId)) {
+        delete nextLastActiveBySession[sessionKey];
+        lastActiveBySessionChanged = true;
+      }
+    }
+    if (lastActiveBySessionChanged) {
+      lastActiveTabIdBySessionKey.value = nextLastActiveBySession;
     }
   }
 
-  function resolveActiveSessionTab(siteId: string, tabs: SiteSessionTab[]) {
-    const currentActive = selectedTab.value?.siteId === siteId
-      ? tabs.find((tab) => tab.id === selectedTab.value?.id)
+  function createSessionGroup(tab: SiteSessionTab): SiteSessionGroup {
+    return {
+      key: toSessionKey(tab.site.id, tab.session.id),
+      site: tab.site,
+      session: tab.session,
+      tabs: [tab],
+      activeTab: tab,
+    };
+  }
+
+  function syncSiteGroupActiveTab(siteGroup: SiteTopLevelTab) {
+    for (const sessionGroup of siteGroup.sessionGroups) {
+      sessionGroup.activeTab = resolveActiveSessionPageTab(sessionGroup);
+    }
+    siteGroup.activeSessionGroup = resolveActiveSessionGroup(siteGroup);
+    siteGroup.activeSessionTab = siteGroup.activeSessionGroup.activeTab;
+  }
+
+  function resolveActiveSessionGroup(siteGroup: SiteTopLevelTab) {
+    const currentActive = selectedTab.value?.siteId === siteGroup.site.id
+      ? siteGroup.sessionGroups.find((group) => group.session.id === selectedTab.value?.sessionId)
+      : undefined;
+    const lastActive = lastActiveTabIdBySiteId.value[siteGroup.site.id];
+    return currentActive
+      || siteGroup.sessionGroups.find((group) => group.tabs.some((tab) => tab.id === lastActive))
+      || siteGroup.sessionGroups.at(-1)
+      || siteGroup.sessionGroups[0];
+  }
+
+  function resolveActiveSessionPageTab(group: SiteSessionGroup) {
+    const currentActive = selectedTab.value?.siteId === group.site.id && selectedTab.value.sessionId === group.session.id
+      ? group.tabs.find((tab) => tab.id === selectedTab.value?.id)
       : undefined;
     return currentActive
-      || tabs.find((tab) => tab.id === lastActiveTabIdBySiteId.value[siteId])
-      || tabs.at(-1)
-      || tabs[0];
+      || group.tabs.find((tab) => tab.id === lastActiveTabIdBySessionKey.value[group.key])
+      || group.tabs.find((tab) => !tab.parentTabId)
+      || group.tabs.at(-1)
+      || group.tabs[0];
   }
 
   return {
@@ -231,7 +315,8 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     selectedSession,
     selectedSessionId,
     openSessionTabs,
-    activeSiteSessionTabs,
+    activeSiteSessionGroups,
+    activeSessionPageTabs,
     topLevelTabs,
     syncTabs,
     resetTabs,
@@ -241,4 +326,8 @@ export function useBrowserTabs(sites: Ref<Site[]>) {
     getTabState,
     findSessionTab,
   };
+}
+
+function toSessionKey(siteId: string, sessionId: string) {
+  return `${siteId}:${sessionId}`;
 }

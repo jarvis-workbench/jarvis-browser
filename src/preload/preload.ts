@@ -28,6 +28,7 @@ const appApi: AppApi = {
     list: () => invoke("sites:list"),
     add: (input) => invoke("sites:add", input),
     update: (siteId, input) => invoke("sites:update", siteId, input),
+    reorder: (siteIds) => invoke("sites:reorder", siteIds),
     delete: (siteId) => invoke("sites:delete", siteId),
   },
   sessions: {
@@ -43,6 +44,7 @@ const appApi: AppApi = {
     openInternalPage: (input) => invoke("browser:open-internal-page", input),
     listTabs: () => invoke("browser:list-tabs"),
     activateTab: (tabId) => invoke("browser:activate-tab", tabId),
+    reorderTabs: (tabIds) => invoke("browser:reorder-tabs", tabIds),
     closeTab: (tabId) => invoke("browser:close-tab", tabId),
     navigateTab: (tabId, url) => invoke<BrowserNavigationResult>("browser:navigate-tab", tabId, url),
     navigate: (url) => invoke<BrowserNavigationResult>("browser:navigate", url),

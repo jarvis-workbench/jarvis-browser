@@ -270,6 +270,13 @@ button:disabled {
     0 1px 0 rgba(255, 255, 255, 0.86) inset,
     0 18px 42px rgba(69, 82, 129, 0.12);
   backdrop-filter: blur(20px);
+  cursor: grab;
+  transition:
+    opacity 140ms ease,
+    transform 160ms ease,
+    border-color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .site-card:hover {
@@ -278,6 +285,12 @@ button:disabled {
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.92) inset,
     0 22px 48px rgba(65, 78, 126, 0.16);
+}
+
+.site-card--dragging {
+  opacity: 0.58;
+  transform: scale(0.98);
+  cursor: grabbing;
 }
 
 .site-card__main {

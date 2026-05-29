@@ -175,6 +175,31 @@ export class MetadataStore {
     return toRendererSite(site);
   }
 
+  async reorderSites(siteIds: string[]) {
+    const requestedIds = siteIds.filter((siteId, index) => siteIds.indexOf(siteId) === index);
+    if (!requestedIds.length) {
+      return this.listSites();
+    }
+
+    const siteById = new Map(this.sites.map((site) => [site.id, site]));
+    const requestedSites = requestedIds
+      .map((siteId) => siteById.get(siteId))
+      .filter((site): site is Site => Boolean(site));
+    if (!requestedSites.length) {
+      return this.listSites();
+    }
+
+    const requestedSet = new Set(requestedSites.map((site) => site.id));
+    this.sites = [
+      ...requestedSites,
+      ...this.sites.filter((site) => !requestedSet.has(site.id)),
+    ];
+    await this.enqueue(async () => {
+      await this.writeSitesIndex();
+    });
+    return this.listSites();
+  }
+
   async updateSiteMetadata(siteId: string, input: { faviconUrl?: string; faviconPath?: string }) {
     const site = this.requireSite(siteId);
 
@@ -763,6 +788,7 @@ async function ensureBaseDirectories() {
   await mkdir(dataPaths.sites.root, { recursive: true });
   await mkdir(dataPaths.runtime.userData, { recursive: true });
   await mkdir(dataPaths.runtime.sessionData, { recursive: true });
+  await mkdir(dataPaths.runtime.extensionLoadRoot, { recursive: true });
   await writeJsonIfMissing(dataPaths.profileFile, createDefaultProfile());
   await writeJsonIfMissing(dataPaths.global.metadataFile, {
     userId: "default",

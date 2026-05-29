@@ -73,6 +73,7 @@ export const dataPaths = {
     root: runtimeRoot,
     userData: join(runtimeRoot, "user-data"),
     sessionData: join(runtimeRoot, "session-data"),
+    extensionLoadRoot: join(runtimeRoot, "extension-load"),
   },
 };
 

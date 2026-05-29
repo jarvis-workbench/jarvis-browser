@@ -164,6 +164,7 @@ export interface BrowserTab {
   siteId?: string;
   sessionId?: string;
   partition: string;
+  parentTabId?: string;
   openerTabId?: string;
   internalPageId?: BrowserInternalPageId;
   pinnedExtensionIds: string[];
@@ -475,6 +476,7 @@ export interface AppApi {
     list(): Promise<Site[]>;
     add(input: { url: string; title?: string }): Promise<Site>;
     update(siteId: string, input: { url?: string; title?: string }): Promise<Site>;
+    reorder(siteIds: string[]): Promise<Site[]>;
     delete(siteId: string): Promise<void>;
   };
   sessions: {
@@ -490,6 +492,7 @@ export interface AppApi {
     openInternalPage(input: OpenInternalPageInput): Promise<BrowserTab>;
     listTabs(): Promise<{ activeTabId?: string; tabs: BrowserTab[] }>;
     activateTab(tabId: string): Promise<void>;
+    reorderTabs(tabIds: string[]): Promise<void>;
     closeTab(tabId: string): Promise<void>;
     navigateTab(tabId: string, url: string): Promise<BrowserNavigationResult>;
     navigate(url: string): Promise<BrowserNavigationResult>;

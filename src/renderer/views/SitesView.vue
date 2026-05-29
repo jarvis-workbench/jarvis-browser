@@ -19,6 +19,8 @@ const settingsDrawerVisible = ref(false);
 const settingsSiteId = ref('');
 const sessionPickerSiteId = ref('');
 const sessionPickerVisible = ref(false);
+const draggedSiteId = ref('');
+let pendingSiteOrderKey = '';
 
 const frequentSites = computed(() => browser.sites.slice(0, 10));
 const filteredSites = computed(() => {
@@ -102,6 +104,89 @@ async function openPickedSession(session: SiteSession) {
     requestAnimationFrame(() => resolve());
   });
   await browser.openSessionFromSite(site, session);
+}
+
+function startSiteDrag(event: DragEvent, site: Site) {
+  if (!event.dataTransfer) {
+    return;
+  }
+
+  draggedSiteId.value = site.id;
+  pendingSiteOrderKey = browser.sites.map((item) => item.id).join('|');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('application/x-jarvis-site-id', site.id);
+}
+
+function previewSiteDrop(event: DragEvent, targetSite: Site) {
+  event.preventDefault();
+  const movingSiteId = draggedSiteId.value;
+  if (!movingSiteId || movingSiteId === targetSite.id) {
+    return;
+  }
+
+  const nextOrder = moveSiteId(
+    browser.sites.map((site) => site.id),
+    movingSiteId,
+    targetSite.id,
+    siteDropPlacement(event),
+  );
+  if (!nextOrder) {
+    return;
+  }
+
+  const orderKey = nextOrder.join('|');
+  if (orderKey === pendingSiteOrderKey) {
+    return;
+  }
+
+  pendingSiteOrderKey = orderKey;
+  browser.previewSiteOrder(nextOrder);
+}
+
+async function finishSiteDrag() {
+  if (!draggedSiteId.value) {
+    return;
+  }
+
+  const nextOrder = browser.sites.map((site) => site.id);
+  draggedSiteId.value = '';
+  pendingSiteOrderKey = '';
+  try {
+    await browser.reorderSites(nextOrder);
+  } catch (error) {
+    await browser.loadSites();
+    ElMessage.error(formatError(error));
+  }
+}
+
+function cancelSiteDrop(event: DragEvent) {
+  event.preventDefault();
+}
+
+function siteDropPlacement(event: DragEvent) {
+  const element = event.currentTarget as HTMLElement | null;
+  const rect = element?.getBoundingClientRect();
+  if (!rect) {
+    return 'before';
+  }
+
+  const horizontal = event.clientX > rect.left + rect.width / 2;
+  const vertical = event.clientY > rect.top + rect.height / 2;
+  return horizontal || vertical ? 'after' : 'before';
+}
+
+function moveSiteId(order: string[], movingSiteId: string, targetSiteId: string, placement: 'before' | 'after') {
+  const fromIndex = order.indexOf(movingSiteId);
+  const targetIndex = order.indexOf(targetSiteId);
+  if (fromIndex < 0 || targetIndex < 0) {
+    return null;
+  }
+
+  const nextOrder = order.filter((siteId) => siteId !== movingSiteId);
+  const nextTargetIndex = nextOrder.indexOf(targetSiteId);
+  const insertIndex = placement === 'after' ? nextTargetIndex + 1 : nextTargetIndex;
+  nextOrder.splice(insertIndex, 0, movingSiteId);
+  return nextOrder.every((siteId, index) => siteId === order[index]) ? null : nextOrder;
 }
 
 function openSiteSettings(site: Site) {
@@ -217,7 +302,17 @@ function formatError(error: unknown) {
       </section>
 
       <section v-if="browser.sites.length" class="site-grid" aria-label="站点列表">
-        <article v-for="site in filteredSites" :key="site.id" class="site-card">
+        <article
+          v-for="site in filteredSites"
+          :key="site.id"
+          class="site-card"
+          :class="{ 'site-card--dragging': draggedSiteId === site.id }"
+          draggable="true"
+          @dragstart="startSiteDrag($event, site)"
+          @dragover="previewSiteDrop($event, site)"
+          @drop="cancelSiteDrop"
+          @dragend="finishSiteDrag"
+        >
           <button class="site-card__main" type="button" @click="openSessionPicker(site)">
             <span class="site-card__icon">
               <img

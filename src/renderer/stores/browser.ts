@@ -109,6 +109,24 @@ export const useBrowserStore = defineStore('browser', () => {
     return updated;
   }
 
+  async function reorderSites(siteIds: string[]) {
+    const nextSites = await window.appApi.sites.reorder(siteIds);
+    sites.value = nextSites;
+    statusMessage.value = '站点顺序已更新';
+    return nextSites;
+  }
+
+  function previewSiteOrder(siteIds: string[]) {
+    const requestedSet = new Set(siteIds);
+    const requestedSites = siteIds
+      .map((siteId) => sites.value.find((site) => site.id === siteId))
+      .filter((site): site is Site => Boolean(site));
+    sites.value = [
+      ...requestedSites,
+      ...sites.value.filter((site) => !requestedSet.has(site.id)),
+    ];
+  }
+
   async function openSite(siteId: string, sessionId?: string) {
     const site = sites.value.find((item) => item.id === siteId);
     if (!site) {
@@ -647,7 +665,8 @@ export const useBrowserStore = defineStore('browser', () => {
     openInternalTabs: tabs.openInternalTabs,
     activeTab: tabs.selectedTab,
     topLevelTabs: tabs.topLevelTabs,
-    activeSiteSessionTabs: tabs.activeSiteSessionTabs,
+    activeSiteSessionGroups: tabs.activeSiteSessionGroups,
+    activeSessionPageTabs: tabs.activeSessionPageTabs,
     globalExtensions: extensions.globalExtensions,
     siteExtensions: extensions.siteExtensions,
     popupExtensions: extensions.popupExtensions,
@@ -675,6 +694,8 @@ export const useBrowserStore = defineStore('browser', () => {
     siteInitial,
     addSite,
     updateSite,
+    reorderSites,
+    previewSiteOrder,
     deleteSite,
     loadSites,
     loadDownloads,

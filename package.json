@@ -1,6 +1,6 @@
 {
   "name": "jarvis-browser",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Site-first multi-session Electron browser",
   "private": true,
   "type": "commonjs",

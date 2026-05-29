@@ -109,7 +109,8 @@ export class JarvisMonitorController {
     });
   };
 
-  private readonly handleConsoleMessage = (_event: Electron.Event, _level: number, message: string) => {
+  private readonly handleConsoleMessage = (event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>) => {
+    const { message } = event;
     if (!message.startsWith("[jarvis-monitor]")) {
       return;
     }
