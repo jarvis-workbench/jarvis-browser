@@ -98,6 +98,9 @@ export class DownloadManager {
       }
 
       this.activeItems.set(id, item);
+      this.emitDownloadUpdate(
+        this.createDownloadState(id, item, "progressing", undefined, plannedSavePath, startedAt),
+      );
       void this.writeItem(id, item, "progressing", undefined, plannedSavePath, startedAt);
       item.on("updated", (_updatedEvent, state) => {
         this.scheduleItemWrite(id, item, state, undefined, "", startedAt);
@@ -196,8 +199,23 @@ export class DownloadManager {
     fallbackSavePath = "",
     fallbackStartTime = Date.now(),
   ) {
+    const download = this.createDownloadState(id, item, state, errorText, fallbackSavePath, fallbackStartTime);
+    const stored = await this.store.upsertDownload(download);
+    this.emitDownloadUpdate(stored);
+
+    return stored;
+  }
+
+  private createDownloadState(
+    id: string,
+    item: DownloadItem,
+    state: DownloadState["state"],
+    errorText?: string,
+    fallbackSavePath = "",
+    fallbackStartTime = Date.now(),
+  ) {
     const savePath = item.getSavePath() || fallbackSavePath;
-    const download = {
+    return {
       id,
       filename: basename(savePath || item.getFilename()),
       url: item.getURL(),
@@ -213,13 +231,12 @@ export class DownloadManager {
       speedBytesPerSecond: item.getCurrentBytesPerSecond(),
       errorText,
     } satisfies DownloadState;
+  }
 
-    const stored = await this.store.upsertDownload(download);
+  private emitDownloadUpdate(download: DownloadState) {
     if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
-      this.window.webContents.send("download:updated", stored);
+      this.window.webContents.send("download:updated", download);
     }
-
-    return stored;
   }
 }
 

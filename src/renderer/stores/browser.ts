@@ -29,7 +29,7 @@ export const useBrowserStore = defineStore('browser', () => {
     updatedAt: '',
   });
   const lastDownloadUpdatedAt = ref(0);
-  const recentDownloadCount = ref(0);
+  const unacknowledgedDownloadCount = ref(0);
   const sessionSyncDialog = ref<OpenSessionSyncDialogInput & { visible: boolean }>({
     visible: false,
     scope: 'global',
@@ -193,6 +193,7 @@ export const useBrowserStore = defineStore('browser', () => {
     await window.appApi.browser.openInternalPage({ pageId });
     if (pageId === downloadsTabId) {
       await loadDownloads();
+      acknowledgeDownloads();
       statusMessage.value = '下载内容';
     } else if (pageId === settingsTabId) {
       await loadSettings();
@@ -536,9 +537,12 @@ export const useBrowserStore = defineStore('browser', () => {
       statusMessage.value = `Jarvis 脚本消息：${message.channel}`;
     });
     const removeDownloadListener = window.appApi.onDownloadUpdated((download) => {
+      const isNewDownload = !downloads.value.some((item) => item.id === download.id);
       patchDownload(download);
       lastDownloadUpdatedAt.value = Date.now();
-      recentDownloadCount.value = downloads.value.filter((item) => item.state === 'progressing').length || 1;
+      if (isNewDownload) {
+        unacknowledgedDownloadCount.value += 1;
+      }
       if (download.state === 'progressing') {
         statusMessage.value = download.paused ? `下载已暂停：${download.filename}` : `正在下载：${download.filename}`;
       } else if (download.state === 'completed') {
@@ -551,6 +555,7 @@ export const useBrowserStore = defineStore('browser', () => {
     });
     const removeTabsListener = window.appApi.onBrowserTabsChanged((state) => {
       tabs.syncTabs(state);
+      syncActiveBrowserState();
     });
     const removeSessionSyncListener = window.appApi.onOpenSessionSyncDialog((input) => {
       void openSessionSyncDialog(input);
@@ -597,7 +602,7 @@ export const useBrowserStore = defineStore('browser', () => {
   }
 
   function acknowledgeDownloads() {
-    recentDownloadCount.value = 0;
+    unacknowledgedDownloadCount.value = 0;
   }
 
   async function refreshBounds(element: HTMLElement | null, insetLeft = 0, insetRight = 0) {
@@ -649,8 +654,36 @@ export const useBrowserStore = defineStore('browser', () => {
     return state.tabId === tabs.activeTabId.value;
   }
 
+  function syncActiveBrowserState() {
+    const activeTab = tabs.selectedTab.value;
+    if (!activeTab) {
+      return;
+    }
+
+    const activeState = tabs.getTabState(activeTab.id);
+    if (activeState) {
+      browserState.value = activeState;
+      address.value = activeState.displayUrl || activeState.url || activeTab.url;
+      return;
+    }
+
+    browserState.value = {
+      ...fallbackBrowserState,
+      tabId: activeTab.id,
+      kind: activeTab.kind,
+      siteId: activeTab.siteId,
+      sessionId: activeTab.sessionId,
+      partition: activeTab.partition,
+      url: activeTab.url,
+      title: activeTab.title,
+      favicon: activeTab.favicon,
+    };
+    address.value = activeTab.url;
+  }
+
   async function syncTabs() {
     tabs.syncTabs(await window.appApi.browser.listTabs());
+    syncActiveBrowserState();
   }
 
   return {
@@ -681,7 +714,7 @@ export const useBrowserStore = defineStore('browser', () => {
     downloadSettings,
     appUpdateStatus,
     lastDownloadUpdatedAt,
-    recentDownloadCount,
+    unacknowledgedDownloadCount,
     sessionSyncDialog,
     activeDownloads: computed(() => downloads.value.filter((download) => download.state === 'progressing')),
     selectedSite,

@@ -19,6 +19,7 @@ const settingsDrawerVisible = ref(false);
 const settingsSiteId = ref('');
 const sessionPickerSiteId = ref('');
 const sessionPickerVisible = ref(false);
+const sessionPickerSearchText = ref('');
 const draggedSiteId = ref('');
 let pendingSiteOrderKey = '';
 
@@ -46,7 +47,12 @@ const sessionPickerSessions = computed(() => {
     return [];
   }
 
-  return [...site.sessions].sort((left, right) => {
+  const keyword = sessionPickerSearchText.value.trim().toLowerCase();
+  const sessions = keyword
+    ? site.sessions.filter((session) => session.name.toLowerCase().includes(keyword))
+    : site.sessions;
+
+  return [...sessions].sort((left, right) => {
     return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
   });
 });
@@ -84,12 +90,14 @@ async function addSite(openAfterCreate = true) {
 
 function openSessionPicker(site: Site) {
   sessionPickerSiteId.value = site.id;
+  sessionPickerSearchText.value = '';
   sessionPickerVisible.value = true;
 }
 
 function closeSessionPicker() {
   sessionPickerVisible.value = false;
   sessionPickerSiteId.value = '';
+  sessionPickerSearchText.value = '';
 }
 
 async function openPickedSession(session: SiteSession) {
@@ -385,6 +393,17 @@ function formatError(error: unknown) {
             </button>
           </header>
 
+          <ElInput
+            v-model="sessionPickerSearchText"
+            class="session-picker__search"
+            placeholder="搜索会话名称"
+            clearable
+          >
+            <template #prefix>
+              <Search theme="outline" size="16" />
+            </template>
+          </ElInput>
+
           <div v-if="sessionPickerSessions.length" class="session-picker__list">
             <button
               v-for="session in sessionPickerSessions"
@@ -399,6 +418,7 @@ function formatError(error: unknown) {
               </span>
             </button>
           </div>
+          <p v-else-if="sessionPickerSearchText.trim()" class="session-picker__empty">没有匹配的会话</p>
           <p v-else class="session-picker__empty">这个站点还没有会话，请先在站点设置中创建会话。</p>
         </section>
       </div>

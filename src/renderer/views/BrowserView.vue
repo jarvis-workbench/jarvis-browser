@@ -92,7 +92,7 @@ const creatingSessionTitle = computed(() => (
   creatingSessionSite.value ? `新建会话 - ${creatingSessionSite.value.title}` : '新建会话'
 ));
 const activeDownloadCount = computed(() => browser.activeDownloads.length);
-const downloadIndicatorCount = computed(() => activeDownloadCount.value || browser.recentDownloadCount);
+const downloadIndicatorCount = computed(() => browser.unacknowledgedDownloadCount || activeDownloadCount.value);
 const hasRecentDownloadActivity = computed(() => nowTick.value - browser.lastDownloadUpdatedAt < 1800);
 const downloadProgress = computed(() => {
   const activeDownloads = browser.activeDownloads.filter((download) => download.totalBytes > 0);
@@ -838,6 +838,7 @@ watch(
 }
 
 .chrome-session-tab {
+  position: relative;
   display: inline-flex;
   width: auto;
   min-width: 0;
@@ -846,23 +847,28 @@ watch(
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
-  border: 1px solid rgba(130, 143, 165, 0.32);
+  border: 1px solid rgba(139, 149, 169, 0.28);
   border-radius: 7px;
   padding: 0 8px;
-  background: rgba(255, 255, 255, 0.48);
-  color: #3c4043;
+  background: rgba(229, 234, 243, 0.66);
+  color: #596274;
   text-align: left;
   -webkit-app-region: no-drag;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
 }
 
 .chrome-session-tab:hover {
-  background: rgba(60, 64, 67, 0.1);
+  background: rgba(255, 255, 255, 0.72);
+  color: #30394f;
 }
 
 .chrome-session-tab--active {
+  border-color: rgba(42, 115, 232, 0.62);
   background: #ffffff;
-  border-color: rgba(82, 132, 219, 0.35);
-  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08);
+  color: #174ea6;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.94) inset,
+    0 4px 12px rgba(42, 115, 232, 0.16);
 }
 
 .chrome-session-tab__loading {
@@ -895,8 +901,13 @@ watch(
   overflow: hidden;
   max-width: 126px;
   font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chrome-session-tab--active .chrome-session-tab__title {
+  font-weight: 700;
 }
 
 .chrome-session-tab__count {
