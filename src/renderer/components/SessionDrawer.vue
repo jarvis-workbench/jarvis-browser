@@ -269,6 +269,16 @@ function openSelectedPickerSessions() {
   selectedPickerSessionIds.value = [];
 }
 
+function togglePickerSession(sessionId: string, checked: boolean) {
+  const nextSessionIds = new Set(selectedPickerSessionIds.value);
+  if (checked) {
+    nextSessionIds.add(sessionId);
+  } else {
+    nextSessionIds.delete(sessionId);
+  }
+  selectedPickerSessionIds.value = [...nextSessionIds];
+}
+
 function sessionEntryUrl() {
   return drawerSite.value?.url ?? '';
 }
@@ -395,10 +405,10 @@ async function openSessionSyncDialog() {
         :class="{ 'session-row--active': session.id === browser.selectedSessionId }"
       >
         <ElCheckbox
-          v-model="selectedPickerSessionIds"
+          :model-value="selectedPickerSessionIds.includes(session.id)"
           class="session-row__check"
-          :value="session.id"
           :aria-label="`选择 ${session.name}`"
+          @change="togglePickerSession(session.id, Boolean($event))"
           @click.stop
         />
         <button type="button" @click="openSession(session)">
