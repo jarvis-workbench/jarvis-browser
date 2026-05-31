@@ -235,6 +235,18 @@ async function openSessionFromPicker(site: Site, session: SiteSession) {
   }
 }
 
+async function openSessionsFromPicker(site: Site, sessions: SiteSession[]) {
+  try {
+    for (const session of sessions) {
+      await browser.openSessionFromSite(site, session);
+    }
+    await setActivePanel(null);
+    browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
 async function navigate() {
   try {
     await browser.navigate();
@@ -735,6 +747,7 @@ watch(
         show-site-picker
         @create-session="openPickerSessionCreator"
         @open-session="openSessionFromPicker"
+        @open-sessions="openSessionsFromPicker"
         @update:model-value="(visible) => syncPanelVisibility('tabPicker', visible)"
       />
 

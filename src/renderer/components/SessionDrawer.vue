@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { AddOne, Delete, Save, TransferData } from '@icon-park/vue-next';
-import { ElButton, ElInput, ElMessage } from 'element-plus';
+import { AddOne, Delete, Left, Save, TransferData } from '@icon-park/vue-next';
+import { ElButton, ElCheckbox, ElInput, ElMessage } from 'element-plus';
 import { computed, ref, watch } from 'vue';
 import type { Site, SiteSession } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   createSession: [site: Site, name: string];
   openSession: [site: Site, session: SiteSession];
+  openSessions: [site: Site, sessions: SiteSession[]];
 }>();
 
 const browser = useBrowserStore();
@@ -35,6 +36,8 @@ const savingSite = ref(false);
 const creatingSession = ref(false);
 const creatingSessionName = ref('');
 const failedIconSrcBySiteId = ref(new Map<string, string>());
+const pickerView = ref<'sites' | 'sessions'>('sites');
+const selectedPickerSessionIds = ref<string[]>([]);
 
 const isSettingsMode = computed(() => Boolean(props.settingsSiteId));
 
@@ -44,13 +47,18 @@ const drawerSite = computed(() => {
   }
 
   if (props.showSitePicker) {
-    return browser.sites.find((site) => site.id === selectedDrawerSiteId.value) ?? browser.sites[0] ?? null;
+    return browser.sites.find((site) => site.id === selectedDrawerSiteId.value) ?? null;
   }
 
   return browser.selectedSite;
 });
 
 const drawerSessions = computed(() => drawerSite.value?.sessions ?? []);
+const selectedPickerSessions = computed(() => {
+  const selectedSessionIds = new Set(selectedPickerSessionIds.value);
+  return drawerSessions.value.filter((session) => selectedSessionIds.has(session.id));
+});
+const canOpenSelectedPickerSessions = computed(() => props.showSitePicker && selectedPickerSessions.value.length > 0);
 const deleteSiteConfirmName = computed(() => drawerSite.value ? siteDisplayTitle(drawerSite.value) : '');
 const canConfirmDeleteSite = computed(() => {
   return pendingDeleteSite.value && deleteSiteConfirmText.value.trim() === deleteSiteConfirmName.value;
@@ -65,8 +73,10 @@ watch(
     }
 
     selectedDrawerSiteId.value = props.showSitePicker
-      ? selectedDrawerSiteId.value || browser.selectedSiteId || browser.sites[0]?.id || ''
+      ? ''
       : browser.selectedSiteId || '';
+    pickerView.value = 'sites';
+    selectedPickerSessionIds.value = [];
     resetDeleteSiteConfirm();
     resetCreateSession();
     editingSiteTitle.value = drawerSite.value?.title ?? '';
@@ -238,6 +248,27 @@ function openSession(session: SiteSession) {
   emit('openSession', drawerSite.value, session);
 }
 
+function openPickerSite(site: Site) {
+  selectedDrawerSiteId.value = site.id;
+  selectedPickerSessionIds.value = [];
+  pickerView.value = 'sessions';
+}
+
+function backToPickerSites() {
+  pickerView.value = 'sites';
+  selectedDrawerSiteId.value = '';
+  selectedPickerSessionIds.value = [];
+}
+
+function openSelectedPickerSessions() {
+  if (!drawerSite.value || !selectedPickerSessions.value.length) {
+    return;
+  }
+
+  emit('openSessions', drawerSite.value, selectedPickerSessions.value);
+  selectedPickerSessionIds.value = [];
+}
+
 function sessionEntryUrl() {
   return drawerSite.value?.url ?? '';
 }
@@ -301,7 +332,7 @@ async function openSessionSyncDialog() {
     width="360px"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div v-if="showSitePicker" class="drawer-section">
+    <div v-if="showSitePicker && pickerView === 'sites'" class="drawer-section picker-panel">
       <div class="drawer-title">
         <span>选择站点</span>
       </div>
@@ -309,9 +340,8 @@ async function openSessionSyncDialog() {
         v-for="site in browser.sites"
         :key="site.id"
         class="site-picker-row"
-        :class="{ 'site-picker-row--active': site.id === drawerSite?.id }"
         type="button"
-        @click="selectedDrawerSiteId = site.id"
+        @click="openPickerSite(site)"
       >
         <span class="site-picker-row__icon">
           <img
@@ -330,7 +360,57 @@ async function openSessionSyncDialog() {
       </button>
     </div>
 
-    <div v-if="drawerSite" class="drawer-section">
+    <div v-if="showSitePicker && pickerView === 'sessions'" class="picker-panel picker-panel--sessions">
+      <div class="picker-step-head">
+        <button class="picker-step-head__back" type="button" title="返回选择站点" @click="backToPickerSites">
+          <Left theme="outline" size="18" />
+          <span>会话</span>
+        </button>
+        <ElButton v-if="canOpenSelectedPickerSessions" type="primary" size="small" @click="openSelectedPickerSessions">
+          打开
+        </ElButton>
+      </div>
+
+      <div v-if="drawerSite" class="drawer-section__head">
+        <span class="drawer-section__site-icon">
+          <img
+            v-if="siteIconSrc(drawerSite)"
+            :src="siteIconSrc(drawerSite)"
+            alt=""
+            @load="markIconLoaded(drawerSite.id)"
+            @error="markIconFailed(drawerSite)"
+          />
+          <span v-else class="site-fallback-icon">{{ siteInitial(drawerSite) }}</span>
+        </span>
+        <span class="drawer-section__site-text">
+          <strong>{{ siteDisplayTitle(drawerSite) }}</strong>
+          <span>{{ drawerSite.url }}</span>
+        </span>
+      </div>
+
+      <article
+        v-for="session in drawerSessions"
+        :key="session.id"
+        class="session-row session-row--picker"
+        :class="{ 'session-row--active': session.id === browser.selectedSessionId }"
+      >
+        <ElCheckbox
+          v-model="selectedPickerSessionIds"
+          class="session-row__check"
+          :value="session.id"
+          :aria-label="`选择 ${session.name}`"
+          @click.stop
+        />
+        <button type="button" @click="openSession(session)">
+          <strong>{{ session.name }}</strong>
+          <span>{{ sessionEntryUrl() }}</span>
+        </button>
+      </article>
+
+      <p v-if="drawerSite && !drawerSessions.length" class="drawer-empty">这个站点还没有会话。</p>
+    </div>
+
+    <div v-if="!showSitePicker && drawerSite" class="drawer-section">
       <div class="drawer-section__head">
         <span class="drawer-section__site-icon">
           <img
@@ -372,7 +452,7 @@ async function openSessionSyncDialog() {
       </div>
     </form>
 
-    <div class="drawer-section">
+    <div v-if="!showSitePicker" class="drawer-section">
       <div class="drawer-title">
         <span>会话列表</span>
         <ElButton size="small" type="primary" :disabled="!drawerSite" @click="startCreateSession">
@@ -460,6 +540,57 @@ async function openSessionSyncDialog() {
   display: grid;
   gap: 12px;
   margin-bottom: 22px;
+}
+
+.picker-panel {
+  margin-bottom: 0;
+}
+
+.picker-panel--sessions {
+  display: grid;
+  gap: 12px;
+}
+
+.picker-step-head {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -12px -22px 0;
+  padding: 10px 22px;
+  border-bottom: 1px solid rgba(226, 231, 243, 0.92);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 255, 0.98), rgba(248, 250, 255, 0.92)),
+    rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(18px);
+}
+
+.picker-step-head__back {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #1f2944;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.picker-step-head__back:hover {
+  color: #5d6fee;
+}
+
+.picker-step-head :deep(.el-button) {
+  min-width: 68px;
+  border: 0;
+  background: linear-gradient(90deg, #5f80ff, #7561f4);
+  color: #ffffff;
 }
 
 .drawer-section__head {
@@ -635,6 +766,19 @@ async function openSessionSyncDialog() {
   padding: 12px;
   background: rgba(255, 255, 255, 0.76);
   box-shadow: 0 10px 24px rgba(72, 84, 132, 0.06);
+}
+
+.session-row--picker {
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+}
+
+.session-row__check {
+  justify-self: center;
+}
+
+.session-row__check :deep(.el-checkbox__label) {
+  display: none;
 }
 
 .session-row--active {
