@@ -24,7 +24,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { BrowserRect, Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
-import SessionSyncDialog from '../components/SessionSyncDialog.vue';
 import {
   clearBrowsingDataTabId,
   downloadsTabId,
@@ -754,12 +753,6 @@ watch(
         </form>
       </BrowserDrawer>
 
-      <SessionSyncDialog
-        :model-value="browser.sessionSyncDialog.visible"
-        :scope="browser.sessionSyncDialog.scope"
-        :site-id="browser.sessionSyncDialog.siteId"
-        @update:model-value="(visible) => visible ? null : browser.closeSessionSyncDialog()"
-      />
     </section>
   </main>
 </template>

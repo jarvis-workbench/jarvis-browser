@@ -351,6 +351,7 @@ function formatError(error: unknown) {
     :title="dialogTitle"
     width="720px"
     class="session-sync-dialog"
+    append-to-body
     destroy-on-close
     @update:model-value="updateVisible"
   >
@@ -495,6 +496,10 @@ function formatError(error: unknown) {
 </template>
 
 <style scoped>
+:global(.session-sync-dialog) {
+  z-index: 3000;
+}
+
 .session-sync {
   display: grid;
   min-width: 0;

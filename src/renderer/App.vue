@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { RouterView, useRoute } from 'vue-router';
 import ExtensionManager from './components/ExtensionManager.vue';
 import JarvisScriptManager from './components/JarvisScriptManager.vue';
+import SessionSyncDialog from './components/SessionSyncDialog.vue';
 import { useBrowserStore } from './stores/browser';
 import ClearBrowsingDataView from './views/ClearBrowsingDataView.vue';
 import DownloadsView from './views/DownloadsView.vue';
@@ -78,4 +79,10 @@ onBeforeUnmount(() => {
 <template>
   <component :is="internalPageComponent" v-if="internalPageComponent" />
   <RouterView v-else />
+  <SessionSyncDialog
+    :model-value="browser.sessionSyncDialog.visible"
+    :scope="browser.sessionSyncDialog.scope"
+    :site-id="browser.sessionSyncDialog.siteId"
+    @update:model-value="(visible) => visible ? null : browser.closeSessionSyncDialog()"
+  />
 </template>
