@@ -406,7 +406,7 @@ export const useBrowserStore = defineStore('browser', () => {
   }
 
   async function openSessionSyncDialog(input: OpenSessionSyncDialogInput) {
-    sessionSyncHadEmbeddedView.value = tabs.selectedTab.value?.kind === 'site';
+    sessionSyncHadEmbeddedView.value = Boolean(tabs.selectedTab.value);
     if (sessionSyncHadEmbeddedView.value) {
       await hideEmbeddedView();
     }

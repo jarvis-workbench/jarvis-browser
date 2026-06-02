@@ -1,6 +1,6 @@
 import { app, protocol, type Session } from "electron";
 import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import type { BrowserInternalPageId } from "../shared/types";
 import { dataPaths } from "./data-paths";
 
@@ -139,6 +139,10 @@ async function handleInternalRequest(request: Request) {
       return proxyDevRendererRequest(requestUrl);
     }
 
+    if (isRendererAssetRequest(requestUrl)) {
+      return handleRendererAssetRequest(requestUrl);
+    }
+
     return htmlResponse(await readRendererHtml(requestUrl.hostname));
   }
 
@@ -220,12 +224,49 @@ async function proxyDevRendererRequest(requestUrl: URL) {
   });
 }
 
-function getRendererIndexPath() {
-  if (!app.isPackaged) {
-    return join(app.getAppPath(), "src", "renderer", "index.html");
+async function handleRendererAssetRequest(requestUrl: URL) {
+  const rendererRoot = getRendererRootPath();
+  const assetPath = resolve(rendererRoot, decodeURIComponent(requestUrl.pathname.slice(1)));
+  const relativeAssetPath = relative(rendererRoot, assetPath);
+  if (
+    relativeAssetPath.startsWith("..")
+    || relativeAssetPath === ""
+    || isAbsolutePath(relativeAssetPath)
+  ) {
+    return new Response("Bad Request", { status: 400 });
   }
 
-  return join(__dirname, "../renderer/index.html");
+  const bytes = await readFile(assetPath).catch(() => undefined);
+  if (!bytes) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  return new Response(bytes, {
+    headers: {
+      "content-type": contentTypeFromPath(assetPath),
+      "cache-control": app.isPackaged ? "max-age=31536000" : "no-store",
+    },
+  });
+}
+
+function isRendererAssetRequest(requestUrl: URL) {
+  return requestUrl.pathname !== "" && requestUrl.pathname !== "/";
+}
+
+function isAbsolutePath(filePath: string) {
+  return resolve(filePath) === filePath;
+}
+
+function getRendererRootPath() {
+  if (!app.isPackaged) {
+    return join(app.getAppPath(), "src", "renderer");
+  }
+
+  return join(__dirname, "../renderer");
+}
+
+function getRendererIndexPath() {
+  return join(getRendererRootPath(), "index.html");
 }
 
 function readErrorPageHtml() {
@@ -266,6 +307,24 @@ function contentTypeFromPath(filePath: string) {
   }
   if (extension === ".webp") {
     return "image/webp";
+  }
+  if (extension === ".js" || extension === ".mjs") {
+    return "text/javascript";
+  }
+  if (extension === ".css") {
+    return "text/css";
+  }
+  if (extension === ".html") {
+    return "text/html; charset=utf-8";
+  }
+  if (extension === ".json") {
+    return "application/json";
+  }
+  if (extension === ".woff") {
+    return "font/woff";
+  }
+  if (extension === ".woff2") {
+    return "font/woff2";
   }
   return "image/x-icon";
 }

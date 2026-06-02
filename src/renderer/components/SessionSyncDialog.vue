@@ -171,8 +171,8 @@ async function exportLoginState() {
     const result = await browser.exportSessionSync({
       scope: props.scope,
       siteId: props.siteId,
-      siteIds: selectedSiteIds.value,
-      sessionIds: selectedSessionIds.value,
+      siteIds: [...selectedSiteIds.value],
+      sessionIds: [...selectedSessionIds.value],
       sessions: exportSelections(),
       encrypted: encrypted.value,
       password: encrypted.value ? password.value : undefined,
@@ -231,8 +231,8 @@ async function applyImport() {
       importId: preview.value.importId,
       scope: props.scope,
       siteId: props.siteId,
-      siteConflicts: siteConflictActions.value,
-      sessionConflicts: sessionConflictActions.value,
+      siteConflicts: { ...siteConflictActions.value },
+      sessionConflicts: { ...sessionConflictActions.value },
     });
     clearPreview();
     ElMessage.success('登录状态已导入');
