@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import { autoUpdater, type ProgressInfo, type UpdateInfo } from "electron-updater";
 import type { AppUpdateProgress, AppUpdateStatus } from "../shared/types";
+import { formatError } from "../shared/utils";
 
 const SUPPORTED_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "win32"]);
 
@@ -236,6 +237,4 @@ function normalizeReleaseNotes(releaseNotes: UpdateInfo["releaseNotes"]) {
   return undefined;
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+

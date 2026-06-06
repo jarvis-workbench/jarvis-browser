@@ -37,6 +37,7 @@ import {
   type SiteSessionTab,
 } from '../stores/browser-tabs';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 
 const browser = useBrowserStore();
 const browserHost = ref<HTMLElement | null>(null);
@@ -481,9 +482,7 @@ async function openPickerSessionCreator(site?: Site) {
   await setActivePanel('sessionCreator');
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 
 onMounted(async () => {
   downloadActivityTimer = window.setInterval(() => {

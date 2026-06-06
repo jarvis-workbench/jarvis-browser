@@ -3,6 +3,7 @@ import { Code, Delete, Play } from '@icon-park/vue-next';
 import { ElButton, ElMessage, ElMessageBox, ElSwitch } from 'element-plus';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { JarvisScript, Site } from '../../shared/types';
+import { formatError } from '../../shared/utils';
 
 type ScriptScope = 'global' | 'site';
 
@@ -211,9 +212,7 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
   sites.value = sites.value.map((site) => site.id === siteId ? { ...site, jarvisScripts: scripts } : site);
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

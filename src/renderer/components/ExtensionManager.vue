@@ -3,6 +3,7 @@ import { Delete, FolderOpen, Plug, Search } from '@icon-park/vue-next';
 import { ElButton, ElMessage, ElSwitch } from 'element-plus';
 import { computed, onMounted, ref, watch } from 'vue';
 import type { Site, SiteExtension } from '../../shared/types';
+import { formatError } from '../../shared/utils';
 
 type ExtensionScope = 'global' | 'site';
 
@@ -183,9 +184,7 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
   sites.value = sites.value.map((site) => site.id === siteId ? { ...site, extensions } : site);
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

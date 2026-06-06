@@ -4,6 +4,7 @@ import type { AppUpdateStatus, BrowserInternalPageId, BrowserRect, BrowserState,
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
 import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
+import { formatError, needsHttpsPrefix } from '../../shared/utils';
 
 const fallbackBrowserState: BrowserState = {
   url: '',
@@ -851,21 +852,7 @@ function assertUniqueSessionName(site: Site, sessionName: string) {
   }
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
-function needsHttpsPrefix(value: string) {
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/i.test(value)) {
-    return false;
-  }
-
-  if (value.startsWith('//')) {
-    return true;
-  }
-
-  return /^(localhost|(\d{1,3}\.){3}\d{1,3}|[^/?#:]+\.[^/?#]+)(?::\d+)?(?:[/?#]|$)/i.test(value);
-}
 
 function internalPageStatus(pageId: BrowserInternalPageId) {
   return {

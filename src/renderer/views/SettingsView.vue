@@ -3,6 +3,7 @@ import { Code, Download, FolderOpen, History, Plug, VacuumCleaner } from '@icon-
 import { ElButton, ElInput, ElMessage, ElProgress, ElSwitch } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import type { BrowserInternalPageId } from '../../shared/types';
+import { formatError } from '../../shared/utils';
 import { useBrowserStore } from '../stores/browser';
 
 const browser = useBrowserStore();
@@ -140,10 +141,6 @@ function unsupportedUpdateText() {
   return updateStatus.value.isPackaged
     ? updateStatus.value.errorText || '当前平台暂不支持自动更新'
     : 'development mode cannot perform real updates.';
-}
-
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 </script>
 

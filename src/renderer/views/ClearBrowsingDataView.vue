@@ -8,6 +8,7 @@ import type {
   StoragePartitionStats,
   StorageStatsInput,
 } from '../../shared/types';
+import { formatError } from '../../shared/utils';
 
 const storageStats = ref<StoragePartitionStats[]>([]);
 const selectedPartition = ref('');
@@ -174,9 +175,7 @@ function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort();
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

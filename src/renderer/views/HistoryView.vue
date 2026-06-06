@@ -4,6 +4,7 @@ import { ElButton, ElInput, ElMessage, ElSelect, ElOption } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import type { HistoryClearInput, HistoryListInput, HistoryRecord } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 
 const browser = useBrowserStore();
 const records = ref<HistoryRecord[]>([]);
@@ -140,9 +141,7 @@ function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort();
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

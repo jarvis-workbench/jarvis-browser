@@ -20,6 +20,7 @@ import type {
   Site,
 } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -340,9 +341,7 @@ function siteTitle(site: Site | SessionSyncPreviewSite) {
   return site.title || new URL(site.url).hostname;
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

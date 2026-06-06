@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { HistoryClearInput, HistoryListInput, HistoryRecord } from "../shared/types";
 import { dataPaths } from "./data-paths";
+import { createId } from "../shared/utils";
 
 type HistoryFile = {
   version: 1;
@@ -22,13 +23,7 @@ const maxHistoryRecords = 5000;
 
 const now = () => new Date().toISOString();
 
-const createId = () => {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
 
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-};
 
 export class HistoryManager {
   private records: HistoryRecord[] = [];

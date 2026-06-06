@@ -1,4 +1,6 @@
-import { dialog } from "electron";
+import { app, dialog } from "electron";
+import { rmSync } from "node:fs";
+import { createId } from "../shared/utils";
 import { ZipReader, ZipWriter, TextReader, TextWriter, Uint8ArrayReader, Uint8ArrayWriter, type Entry } from "@zip.js/zip.js";
 import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -96,7 +98,22 @@ export class SessionSyncManager {
   constructor(
     private readonly store: MetadataStore,
     private readonly browserHost: BrowserHostLike,
-  ) {}
+  ) {
+    app.on("will-quit", () => {
+      this.disposeSync();
+    });
+  }
+
+  private disposeSync() {
+    for (const pending of this.pendingImports.values()) {
+      try {
+        rmSync(pending.tempDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`[session-sync] 退出清理临时目录失败: ${pending.tempDir}`, error);
+      }
+    }
+    this.pendingImports.clear();
+  }
 
   async export(input: SessionSyncExportInput): Promise<SessionSyncExportResult> {
     const encrypted = input.encrypted !== false;
@@ -866,13 +883,7 @@ function createCanceledPreview(): SessionSyncPreviewImportResult {
   };
 }
 
-function createId() {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
 
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
 
 function getPendingSessionTempDir(tempDir: string, sourceSiteId: string, sourceSessionId: string) {
   return join(tempDir, "sites", sourceSiteId, "sessions", sourceSessionId);

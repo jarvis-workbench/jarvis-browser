@@ -12,6 +12,7 @@ import { ElButton, ElMessage, ElProgress } from 'element-plus';
 import { computed, onMounted } from 'vue';
 import type { DownloadState } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 
 const browser = useBrowserStore();
 
@@ -89,9 +90,7 @@ function canControl(download: DownloadState) {
   return download.state === 'progressing';
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 </script>
 
 <template>

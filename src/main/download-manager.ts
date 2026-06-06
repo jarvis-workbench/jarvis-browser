@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import type { DownloadState } from "../shared/types";
 import type { MetadataStore } from "./store";
+import { formatError } from "../shared/utils";
 
 type PendingDownloadWrite = {
   item: DownloadItem;
@@ -260,6 +261,4 @@ function toMilliseconds(seconds: number) {
   return seconds > 0 ? Math.round(seconds * 1000) : 0;
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+

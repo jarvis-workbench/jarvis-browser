@@ -4,6 +4,7 @@ import { ElButton, ElCheckbox, ElInput, ElMessage } from 'element-plus';
 import { computed, ref, watch } from 'vue';
 import type { Site, SiteSession } from '../../shared/types';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 import BrowserDrawer from './BrowserDrawer.vue';
 
 const props = withDefaults(defineProps<{
@@ -236,9 +237,7 @@ async function confirmDeleteSite() {
   }
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 
 function openSession(session: SiteSession) {
   if (!drawerSite.value) {

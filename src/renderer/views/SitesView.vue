@@ -6,6 +6,7 @@ import type { Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
 import { useBrowserStore } from '../stores/browser';
+import { formatError } from '../../shared/utils';
 
 const browser = useBrowserStore();
 const addDrawerVisible = ref(false);
@@ -261,10 +262,6 @@ function siteInitial(site: Site) {
 
 function siteDisplayTitle(site: Site) {
   return site.title || new URL(site.url).hostname;
-}
-
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 </script>
 

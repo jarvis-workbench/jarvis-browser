@@ -6,6 +6,7 @@ import { dataPaths } from "./data-paths";
 import { readExtensionManifestMetadata } from "./extension-manifest";
 import { createSiteFaviconInternalUrl } from "./internal-protocol";
 import { createJarvisScriptFromPath } from "./jarvis-script/manifest";
+import { createId } from "../shared/utils";
 
 type SiteIndexItem = Pick<Site, "id" | "title" | "name" | "url" | "faviconUrl" | "faviconPath" | "createdAt" | "updatedAt">;
 type ProfileFile = {
@@ -17,13 +18,7 @@ type ProfileFile = {
 
 const now = () => new Date().toISOString();
 
-const createId = () => {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
 
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-};
 
 const cleanText = (value: string, label: string) => {
   const trimmed = value.trim();

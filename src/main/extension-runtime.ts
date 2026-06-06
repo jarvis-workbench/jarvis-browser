@@ -6,6 +6,7 @@ import { dataPaths } from "./data-paths";
 import { getDefaultProfileSession, getElectronSession } from "./electron-session-manager";
 import { createExtensionFromPath } from "./extension-manifest";
 import type { MetadataStore } from "./store";
+import { formatError } from "../shared/utils";
 
 type BindSessionDownloads = (key: string, targetSession: Electron.Session) => void;
 const electronUnsupportedExtensionPermissions = new Set(["cookies", "webNavigation"]);
@@ -237,9 +238,7 @@ export class ExtensionRuntime {
   }
 }
 
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+
 
 async function prepareElectronExtensionLoadPath(extension: SiteExtension) {
   const manifest = JSON.parse(await readFile(join(extension.path, "manifest.json"), "utf8")) as {

@@ -37,7 +37,6 @@ import {
   createExtensionMenuItems,
   getToolOverlayHeight,
   toolOverlayUrl,
-  type BrowserOverlayAction,
   type BrowserOverlayMenuModel,
 } from "../browser-overlay-menu";
 import { MetadataStore, normalizeHttpUrl } from "../store";
@@ -47,6 +46,7 @@ import { formatNavigationError, isBrowserDevToolsShortcut, isBrowserReloadShortc
 import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
 import { createBrowserState } from "./state";
 import { ViewRegistry } from "./view-registry";
+import { createId } from "../../shared/utils";
 
 const now = () => new Date().toISOString();
 
@@ -55,13 +55,7 @@ type HttpStatusListener = {
   webContentsIds: Map<number, string>;
 };
 
-const createId = () => {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
 
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-};
 
 export class BrowserHost {
   private readonly views = new Map<string, WebContentsView>();
@@ -464,6 +458,16 @@ export class BrowserHost {
     return this.requireActiveTabOrUndefined()?.siteId;
   }
 
+  getActiveTab() {
+    return this.requireActiveTabOrUndefined();
+  }
+
+  sendToWebContents(channel: string, ...args: any[]) {
+    if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
+      this.window.webContents.send(channel, ...args);
+    }
+  }
+
   isActiveSession(siteId: string, sessionId: string) {
     const tab = this.requireActiveTabOrUndefined();
     return tab?.siteId === siteId && tab.sessionId === sessionId;
@@ -654,74 +658,6 @@ export class BrowserHost {
         emptyText: input.emptyText,
       } satisfies BrowserOverlayMenuModel,
     });
-  }
-
-  async handleOverlayAction(input: { action: BrowserOverlayAction; id: string; anchor?: BrowserRect }) {
-    if (input.action === "extension-popup") {
-      if (!input.anchor) {
-        throw new Error("浮层动作缺少锚点");
-      }
-      this.browserOverlayHost.closeOverlay();
-      const activeTab = this.requireActiveTab();
-      if (!activeTab.siteId || !activeTab.sessionId) {
-        throw new Error("当前标签不是站点会话");
-      }
-      await this.openExtensionPopup({
-        siteId: activeTab.siteId,
-        sessionId: activeTab.sessionId,
-        extensionId: input.id,
-        anchor: input.anchor,
-      });
-      return;
-    }
-
-    this.browserOverlayHost.closeOverlay();
-    if (input.action === "extensions") {
-      await this.openInternalPage({ pageId: "extensions" });
-      return;
-    }
-
-    if (input.action === "install-site-extension") {
-      const activeTab = this.requireActiveTab();
-      if (activeTab.siteId) {
-        await this.installSiteUnpacked(activeTab.siteId);
-      }
-      return;
-    }
-
-    if (input.action === "downloads") {
-      await this.openInternalPage({ pageId: "downloads" });
-      return;
-    }
-
-    if (input.action === "settings") {
-      await this.openInternalPage({ pageId: "settings" });
-      return;
-    }
-
-    if (input.action === "history") {
-      await this.openInternalPage({ pageId: "history" });
-      return;
-    }
-
-    if (input.action === "session-sync") {
-      this.browserOverlayHost.closeOverlay();
-      setTimeout(() => {
-        if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
-          this.window.webContents.send("session-sync:open-dialog", { scope: "global", hideActiveView: true });
-        }
-      }, 0);
-      return;
-    }
-
-    if (input.action === "clear-browsing-data") {
-      await this.openInternalPage({ pageId: "clear-browsing-data" });
-      return;
-    }
-
-    if (input.action === "jarvis-script") {
-      await this.openInternalPage({ pageId: "jarvis-script" });
-    }
   }
 
   async setActiveSessionCookie(details: CookieSetDetails) {

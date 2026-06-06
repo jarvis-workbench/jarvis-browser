@@ -1,4 +1,5 @@
 import type { BrowserNavigationResult } from "../../shared/types";
+import { needsHttpsPrefix } from "../../shared/utils";
 
 export type NavigationTarget =
   | {
@@ -32,8 +33,7 @@ const externalProtocols = new Set([
   "sms:",
 ]);
 
-const explicitSchemePattern = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
-const hostLikePattern = /^(localhost|(\d{1,3}\.){3}\d{1,3}|[^/?#:]+\.[^/?#]+)(?::\d+)?(?:[/?#]|$)/i;
+
 
 export function resolveNavigationTarget(rawUrl: string): NavigationTarget {
   const trimmed = rawUrl.trim();
@@ -106,21 +106,7 @@ export function toNavigationResult(target: NavigationTarget): BrowserNavigationR
   };
 }
 
-function needsHttpsPrefix(value: string) {
-  if (hostLikePattern.test(value)) {
-    return true;
-  }
 
-  if (explicitSchemePattern.test(value)) {
-    return false;
-  }
-
-  if (value.startsWith("//")) {
-    return true;
-  }
-
-  return false;
-}
 
 function isCustomExternalProtocol(protocol: string) {
   return protocol.endsWith(":")
