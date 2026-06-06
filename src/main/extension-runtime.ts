@@ -50,6 +50,7 @@ export class ExtensionRuntime {
       await createExtensionFromPath(paths[0]),
       paths[0],
     );
+    clearExtensionLoadCache(extension.id);
     try {
       const loaded = await this.loadForAllSites(extension);
       if (loaded) {
@@ -84,6 +85,7 @@ export class ExtensionRuntime {
       await createExtensionFromPath(paths[0]),
       paths[0],
     );
+    clearExtensionLoadCache(extension.id);
     try {
       const loaded = await this.loadForSite(site, extension);
       extension.id = loaded.id;
@@ -97,6 +99,7 @@ export class ExtensionRuntime {
   }
 
   async enableGlobal(extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
       throw new Error("扩展程序不存在");
@@ -116,6 +119,7 @@ export class ExtensionRuntime {
   }
 
   async disableGlobal(extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
       throw new Error("扩展程序不存在");
@@ -126,6 +130,7 @@ export class ExtensionRuntime {
   }
 
   async uninstallGlobal(extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const extension = this.store.getGlobalExtension(extensionId);
     if (!extension) {
       throw new Error("扩展程序不存在");
@@ -136,6 +141,7 @@ export class ExtensionRuntime {
   }
 
   async enableSite(siteId: string, extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const site = this.store.getSite(siteId);
     const extension = site?.extensions.find((item) => item.id === extensionId);
     if (!site || !extension) {
@@ -156,6 +162,7 @@ export class ExtensionRuntime {
   }
 
   async disableSite(siteId: string, extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const site = this.store.getSite(siteId);
     const extension = site?.extensions.find((item) => item.id === extensionId);
     if (!site || !extension) {
@@ -167,6 +174,7 @@ export class ExtensionRuntime {
   }
 
   async uninstallSite(siteId: string, extensionId: string) {
+    clearExtensionLoadCache(extensionId);
     const site = this.store.getSite(siteId);
     if (!site) {
       throw new Error("站点不存在");
@@ -240,6 +248,12 @@ export class ExtensionRuntime {
 
 
 
+const extensionLoadPromises = new Map<string, Promise<string>>();
+
+export function clearExtensionLoadCache(extensionId: string) {
+  extensionLoadPromises.delete(extensionId);
+}
+
 async function prepareElectronExtensionLoadPath(extension: SiteExtension) {
   const manifest = JSON.parse(await readFile(join(extension.path, "manifest.json"), "utf8")) as {
     permissions?: string[];
@@ -250,13 +264,28 @@ async function prepareElectronExtensionLoadPath(extension: SiteExtension) {
     return extension.path;
   }
 
-  const loadPath = join(dataPaths.runtime.extensionLoadRoot, extension.id);
-  await rm(loadPath, { recursive: true, force: true });
-  await mkdir(loadPath, { recursive: true });
-  await cp(extension.path, loadPath, { recursive: true });
-  await writeFile(
-    join(loadPath, "manifest.json"),
-    JSON.stringify({ ...manifest, permissions: filteredPermissions }, null, 2),
-  );
-  return loadPath;
+  const existingPromise = extensionLoadPromises.get(extension.id);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = (async () => {
+    const loadPath = join(dataPaths.runtime.extensionLoadRoot, extension.id);
+    await rm(loadPath, { recursive: true, force: true });
+    await mkdir(loadPath, { recursive: true });
+    await cp(extension.path, loadPath, { recursive: true });
+    await writeFile(
+      join(loadPath, "manifest.json"),
+      JSON.stringify({ ...manifest, permissions: filteredPermissions }, null, 2),
+    );
+    return loadPath;
+  })();
+
+  extensionLoadPromises.set(extension.id, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    extensionLoadPromises.delete(extension.id);
+    throw error;
+  }
 }
