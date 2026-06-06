@@ -9,6 +9,8 @@ export interface CookieSetDetails {
   url: string;
   name: string;
   value: string;
+  siteId?: string;
+  sessionId?: string;
   domain?: string;
   path?: string;
   secure?: boolean;
@@ -20,6 +22,8 @@ export interface CookieSetDetails {
 export interface CookieRemoveDetails {
   url: string;
   name: string;
+  siteId?: string;
+  sessionId?: string;
 }
 
 export interface SiteSession {
@@ -346,6 +350,7 @@ export interface SessionSyncSelection {
 export interface OpenSessionSyncDialogInput {
   scope: SessionSyncScope;
   siteId?: string;
+  hideActiveView?: boolean;
 }
 
 export interface SessionSyncExportInput {

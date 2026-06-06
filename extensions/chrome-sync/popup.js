@@ -27,6 +27,7 @@
   elements.exportState.addEventListener("click", exportState);
   elements.stateFile.addEventListener("change", readImportFile);
   elements.importState.addEventListener("click", importState);
+  chrome.runtime.onMessage.addListener(handleJarvisCookieMessage);
 
   async function init() {
     elements.browserName.textContent = format.detectBrowserName();
@@ -254,6 +255,35 @@
       title: params.get("jarvisTabTitle") || tabUrl,
       active: true,
     };
+  }
+
+  function handleJarvisCookieMessage(message, _sender, sendResponse) {
+    if (!message || message.type !== `${MESSAGE_PREFIX}jarvis-cookie`) {
+      return false;
+    }
+
+    handleJarvisCookieRequest(message)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: stringifyError(error) }));
+    return true;
+  }
+
+  async function handleJarvisCookieRequest(message) {
+    if (!globalThis.jarvisExtensionPopup) {
+      throw new Error("Jarvis cookie bridge is unavailable in this popup.");
+    }
+
+    if (message.action === "set") {
+      await globalThis.jarvisExtensionPopup.cookiesSet(message.details);
+      return;
+    }
+
+    if (message.action === "remove") {
+      await globalThis.jarvisExtensionPopup.cookiesRemove(message.details);
+      return;
+    }
+
+    throw new Error(`Unsupported Jarvis cookie action: ${message.action || ""}`);
   }
 
   function setBusy(isBusy, message) {

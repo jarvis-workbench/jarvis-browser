@@ -557,6 +557,8 @@ export class BrowserHost {
     const popupUrl = new URL(defaultPopup, loadedExtension.url);
     popupUrl.searchParams.set("jarvisTabId", String(activeView.webContents.id));
     popupUrl.searchParams.set("jarvisTabUrl", activeView.webContents.getURL());
+    popupUrl.searchParams.set("jarvisSiteId", input.siteId);
+    popupUrl.searchParams.set("jarvisSessionId", input.sessionId);
     const title = activeView.webContents.getTitle();
     if (title) {
       popupUrl.searchParams.set("jarvisTabTitle", title);
@@ -706,7 +708,7 @@ export class BrowserHost {
       this.browserOverlayHost.closeOverlay();
       setTimeout(() => {
         if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
-          this.window.webContents.send("session-sync:open-dialog", { scope: "global" });
+          this.window.webContents.send("session-sync:open-dialog", { scope: "global", hideActiveView: true });
         }
       }, 0);
       return;
@@ -723,14 +725,14 @@ export class BrowserHost {
   }
 
   async setActiveSessionCookie(details: CookieSetDetails) {
-    const active = this.requireActiveSiteSession();
-    const targetSession = getElectronSession(active.siteId, active.sessionId);
+    const target = this.resolveCookieSessionTarget(details);
+    const targetSession = getElectronSession(target.siteId, target.sessionId);
     await targetSession.cookies.set(toElectronCookieSetDetails(details));
   }
 
   async removeActiveSessionCookie(details: CookieRemoveDetails) {
-    const active = this.requireActiveSiteSession();
-    const targetSession = getElectronSession(active.siteId, active.sessionId);
+    const target = this.resolveCookieSessionTarget(details);
+    const targetSession = getElectronSession(target.siteId, target.sessionId);
     await targetSession.cookies.remove(details.url, details.name);
   }
 
@@ -1538,6 +1540,19 @@ export class BrowserHost {
     }
 
     return { siteId: tab.siteId, sessionId: tab.sessionId };
+  }
+
+  private resolveCookieSessionTarget(details: { siteId?: string; sessionId?: string }) {
+    if (details.siteId && details.sessionId) {
+      const siteSession = this.store.getSession(details.siteId, details.sessionId);
+      if (!siteSession) {
+        throw new Error("Cookie 目标会话不存在");
+      }
+
+      return { siteId: details.siteId, sessionId: details.sessionId };
+    }
+
+    return this.requireActiveSiteSession();
   }
 
   private resolveJarvisScriptRequestContext(input: { siteId?: string; sessionId?: string }) {

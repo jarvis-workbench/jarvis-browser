@@ -461,6 +461,9 @@ importScripts("state-format.js");
     if (globalThis.jarvisExtensionPopup && typeof globalThis.jarvisExtensionPopup.cookiesSet === "function") {
       return globalThis.jarvisExtensionPopup.cookiesSet(toJarvisCookieSetDetails(details));
     }
+    if (isJarvisPopupBridgeAvailable()) {
+      return sendJarvisCookieMessage("set", toJarvisCookieSetDetails(details));
+    }
 
     return new Promise((resolve, reject) => {
       chrome.cookies.set(details, (cookie) => {
@@ -478,9 +481,39 @@ importScripts("state-format.js");
     if (globalThis.jarvisExtensionPopup && typeof globalThis.jarvisExtensionPopup.cookiesRemove === "function") {
       return globalThis.jarvisExtensionPopup.cookiesRemove(toJarvisCookieRemoveDetails(details));
     }
+    if (isJarvisPopupBridgeAvailable()) {
+      return sendJarvisCookieMessage("remove", toJarvisCookieRemoveDetails(details));
+    }
 
     return new Promise((resolve) => {
       chrome.cookies.remove(details, () => resolve());
+    });
+  }
+
+  function isJarvisPopupBridgeAvailable() {
+    return typeof chrome !== "undefined"
+      && chrome.runtime
+      && typeof chrome.runtime.sendMessage === "function";
+  }
+
+  function sendJarvisCookieMessage(action, details) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: `${MESSAGE_PREFIX}jarvis-cookie`,
+        action,
+        details,
+      }, (response) => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject(new Error(lastError.message));
+          return;
+        }
+        if (!response || !response.ok) {
+          reject(new Error(response && response.error ? response.error : "Jarvis cookie bridge did not respond."));
+          return;
+        }
+        resolve();
+      });
     });
   }
 
