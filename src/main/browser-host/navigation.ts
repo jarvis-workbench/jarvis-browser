@@ -1,3 +1,5 @@
+import { formatError } from "../../shared/utils";
+
 export function isBrowserReloadShortcut(input: Electron.Input) {
   const key = input.key.toLowerCase();
   return input.key === "F5" || (key === "r" && (input.control || input.meta));
@@ -9,7 +11,7 @@ export function isBrowserDevToolsShortcut(input: Electron.Input) {
 }
 
 export function formatNavigationError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return formatError(error);
 }
 
 export function isNavigationAbort(error: unknown) {

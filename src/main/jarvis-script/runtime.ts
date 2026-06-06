@@ -5,6 +5,7 @@ import type { BrowserWindow } from "electron";
 import type { JarvisScript, JarvisScriptRuntimeState } from "../../shared/types";
 import { dataPaths } from "../data-paths";
 import type { MetadataStore } from "../store";
+import { formatError } from "../../shared/utils";
 import type {
   JarvisContentScriptAsset,
   JarvisMonitorEvent,
@@ -263,7 +264,7 @@ export class JarvisScriptRuntime {
   private readonly markScriptError = (script: JarvisScript, error: unknown) => {
     const runtimeState = {
       enabled: script.runtimeState.enabled,
-      loadError: error instanceof Error ? error.message : String(error),
+      loadError: formatError(error),
       lastStoppedAt: new Date().toISOString(),
     };
     this.runtimeStates.set(this.scriptKey(script), runtimeState);
@@ -331,7 +332,7 @@ export class JarvisScriptRuntime {
       worker.postMessage({
         type: "jarvis-script:rpc-result",
         rpcId: message.rpcId,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatError(error),
       });
       this.markScriptError(script, error);
     }

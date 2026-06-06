@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Script, createContext } from "node:vm";
 import type { JarvisScript } from "../../shared/types";
-import { formatError } from "../../shared/utils";
+import { createId, formatError } from "../../shared/utils";
 
 type ScriptModule = {
   activate?: (api: JarvisScriptWorkerApi) => Promise<void> | void;
@@ -173,7 +173,7 @@ async function loadScriptModule() {
 
 
 function rpc(method: string, payload?: Record<string, unknown>) {
-  const rpcId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const rpcId = createId();
   parentPort?.postMessage({
     type: "jarvis-script:rpc",
     rpcId,

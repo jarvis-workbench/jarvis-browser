@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import type { DownloadState } from "../shared/types";
 import type { MetadataStore } from "./store";
-import { formatError } from "../shared/utils";
+import { createId, formatError } from "../shared/utils";
 
 type PendingDownloadWrite = {
   item: DownloadItem;
@@ -78,7 +78,7 @@ export class DownloadManager {
 
     this.boundSessions.add(targetSession);
     targetSession.on("will-download", (_event: Event, item: DownloadItem) => {
-      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const id = createId();
       const filename = basename(item.getFilename());
       const settings = this.store.getDownloadSettings();
       let plannedSavePath = "";

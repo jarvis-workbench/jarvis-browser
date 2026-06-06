@@ -718,7 +718,7 @@ export class SessionSyncManager {
     targetPath: string,
     afterReplace: () => Promise<void>,
   ) {
-    const backupPath = `${targetPath}.backup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const backupPath = `${targetPath}.backup-${createId()}`;
     let backedUp = false;
     await this.browserHost.closeSession(siteId, sessionId);
     try {
