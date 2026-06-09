@@ -291,48 +291,22 @@ export interface HistoryClearInput {
   sessionId?: string;
 }
 
-export type BrowserStorageType =
-  | "cookies"
-  | "filesystem"
-  | "indexdb"
-  | "localstorage"
-  | "shadercache"
-  | "websql"
-  | "serviceworkers"
-  | "cachestorage";
-
 export interface StorageStatsInput {
   partition?: string;
-  origin?: string;
-}
-
-export interface StorageOriginStats {
-  origin: string;
-  historyCount: number;
-  lastVisitedAt?: string;
-  cookieCount: number;
-  cookieBytes: number;
 }
 
 export interface StoragePartitionStats {
   partition: string;
   cacheBytes: number;
   storagePath?: string;
-  originCount: number;
-  origins: StorageOriginStats[];
 }
 
 export interface StorageClearDataInput {
   partition: string;
-  origin?: string;
-  storages?: BrowserStorageType[];
-  clearCache?: boolean;
 }
 
 export interface StorageClearDataResult {
   partition: string;
-  origin?: string;
-  storagesCleared: BrowserStorageType[];
   cacheCleared: boolean;
 }
 

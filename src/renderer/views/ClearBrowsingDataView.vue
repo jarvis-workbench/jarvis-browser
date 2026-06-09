@@ -1,84 +1,156 @@
 <script setup lang="ts">
 import { Delete, Refresh, Search } from '@icon-park/vue-next';
-import { ElButton, ElCheckbox, ElInput, ElMessage, ElOption, ElSelect } from 'element-plus';
-import { computed, onMounted, ref, watch } from 'vue';
+import { ElButton, ElInput, ElMessage, ElOption, ElSelect } from 'element-plus';
+import { computed, onMounted, ref } from 'vue';
 import type {
-  BrowserStorageType,
-  StorageClearDataInput,
+  HistoryRecord,
+  Site,
+  SiteSession,
   StoragePartitionStats,
-  StorageStatsInput,
 } from '../../shared/types';
+import { createSessionPartition } from '../../shared/session-partitions';
+import { useBrowserStore } from '../stores/browser';
 import { formatError } from '../../shared/utils';
 
+type CacheTarget = {
+  partition: string;
+  site: Site;
+  session: SiteSession;
+  cacheBytes: number;
+  historyCount: number;
+  lastVisitedAt?: string;
+};
+
+type SiteGroup = {
+  site: Site;
+  cacheBytes: number;
+  historyCount: number;
+  lastVisitedAt?: string;
+  targets: CacheTarget[];
+};
+
+const browser = useBrowserStore();
 const storageStats = ref<StoragePartitionStats[]>([]);
-const selectedPartition = ref('');
-const selectedOrigin = ref('');
-const originSearch = ref('');
-const clearHistory = ref(true);
-const clearCookies = ref(true);
-const clearCache = ref(true);
-const clearStorage = ref(true);
+const historyRecords = ref<HistoryRecord[]>([]);
+const selectedSiteId = ref('');
+const searchText = ref('');
 const loading = ref(false);
 const clearing = ref(false);
 
-const filteredStats = computed(() => {
-  if (!selectedPartition.value) {
-    return storageStats.value;
+const cacheTargets = computed<CacheTarget[]>(() => {
+  const statsByPartition = new Map(storageStats.value.map((item) => [item.partition, item]));
+  const historyByPartition = new Map<string, { count: number; lastVisitedAt?: string }>();
+
+  for (const record of historyRecords.value) {
+    const current = historyByPartition.get(record.partition) ?? { count: 0 };
+    current.count += 1;
+    if (!current.lastVisitedAt || record.visitedAt > current.lastVisitedAt) {
+      current.lastVisitedAt = record.visitedAt;
+    }
+    historyByPartition.set(record.partition, current);
   }
 
-  return storageStats.value.filter((item) => item.partition === selectedPartition.value);
+  return browser.sites
+    .flatMap((site) => site.sessions.map((session) => {
+      const partition = createSessionPartition(site.id, session.id);
+      const stats = statsByPartition.get(partition);
+      const history = historyByPartition.get(partition);
+
+      return {
+        partition,
+        site,
+        session,
+        cacheBytes: stats?.cacheBytes ?? 0,
+        historyCount: history?.count ?? 0,
+        lastVisitedAt: history?.lastVisitedAt,
+      };
+    }))
+    .sort(compareTargets);
 });
 
-const originOptions = computed(() => {
-  const keyword = originSearch.value.trim().toLowerCase();
-  const origins = filteredStats.value.flatMap((partition) => partition.origins.map((origin) => origin.origin));
-  return unique(origins).filter((origin) => !keyword || origin.toLowerCase().includes(keyword));
-});
+const siteOptions = computed(() => browser.sites.filter((site) =>
+  cacheTargets.value.some((target) => target.site.id === site.id),
+));
 
-const displayedStats = computed(() => filteredStats.value.map((partitionStats) => {
-  const keyword = originSearch.value.trim().toLowerCase();
-  const origins = partitionStats.origins.filter((origin) => {
-    if (selectedOrigin.value && origin.origin !== selectedOrigin.value) {
+const displayedTargets = computed(() => {
+  const keyword = searchText.value.trim().toLowerCase();
+  return cacheTargets.value.filter((target) => {
+    if (selectedSiteId.value && target.site.id !== selectedSiteId.value) {
       return false;
     }
 
-    return !keyword || origin.origin.toLowerCase().includes(keyword);
+    if (!keyword) {
+      return true;
+    }
+
+    return [
+      siteDisplayTitle(target.site),
+      target.site.url,
+      target.session.name,
+      target.session.lastUrl,
+    ].some((value) => value?.toLowerCase().includes(keyword));
   });
+});
 
-  return {
-    ...partitionStats,
-    originCount: origins.length,
-    origins,
-  };
-}).filter((partitionStats) => partitionStats.origins.length || !selectedOrigin.value));
+const groupedTargets = computed<SiteGroup[]>(() => {
+  const groups = new Map<string, SiteGroup>();
 
-const totalOriginCount = computed(() => displayedStats.value.reduce((total, item) => total + item.originCount, 0));
-const totalCacheBytes = computed(() => filteredStats.value.reduce((total, item) => total + item.cacheBytes, 0));
+  for (const target of displayedTargets.value) {
+    const current = groups.get(target.site.id) ?? {
+      site: target.site,
+      cacheBytes: 0,
+      historyCount: 0,
+      lastVisitedAt: undefined,
+      targets: [],
+    };
+    current.cacheBytes += target.cacheBytes;
+    current.historyCount += target.historyCount;
+    if (target.lastVisitedAt && (!current.lastVisitedAt || target.lastVisitedAt > current.lastVisitedAt)) {
+      current.lastVisitedAt = target.lastVisitedAt;
+    }
+    current.targets.push(target);
+    groups.set(target.site.id, current);
+  }
+
+  return [...groups.values()].sort((left, right) => {
+    if (left.lastVisitedAt && right.lastVisitedAt && left.lastVisitedAt !== right.lastVisitedAt) {
+      return right.lastVisitedAt.localeCompare(left.lastVisitedAt);
+    }
+
+    if (left.lastVisitedAt) {
+      return -1;
+    }
+
+    if (right.lastVisitedAt) {
+      return 1;
+    }
+
+    return siteDisplayTitle(left.site).localeCompare(siteDisplayTitle(right.site));
+  });
+});
+
+const visibleTargetCount = computed(() => displayedTargets.value.length);
+const totalCacheBytes = computed(() => displayedTargets.value.reduce((total, target) => total + target.cacheBytes, 0));
+const totalSiteCount = computed(() => new Set(displayedTargets.value.map((target) => target.site.id)).size);
 const totalHistoryCount = computed(() =>
-  displayedStats.value.reduce((total, partitionStats) =>
-    total + partitionStats.origins.reduce((originTotal, origin) => originTotal + origin.historyCount, 0), 0),
+  displayedTargets.value.reduce((total, target) => total + target.historyCount, 0),
 );
-const totalCookieCount = computed(() =>
-  displayedStats.value.reduce((total, partitionStats) =>
-    total + partitionStats.origins.reduce((originTotal, origin) => originTotal + origin.cookieCount, 0), 0),
-);
-
-const canClear = computed(() => clearHistory.value || clearCookies.value || clearCache.value || clearStorage.value);
+const selectedCacheCount = computed(() => displayedTargets.value.filter((target) => target.cacheBytes > 0).length);
+const canClear = computed(() => displayedTargets.value.length > 0);
 
 onMounted(() => {
   void loadStats();
 });
 
-watch(selectedPartition, () => {
-  if (selectedOrigin.value && !originOptions.value.includes(selectedOrigin.value)) {
-    selectedOrigin.value = '';
-  }
-});
-
 async function loadStats() {
   try {
     loading.value = true;
-    storageStats.value = await getStorageStats();
+    const [stats, records] = await Promise.all([
+      window.appApi.storage.stats(),
+      window.appApi.history.list(),
+    ]);
+    storageStats.value = stats;
+    historyRecords.value = records;
   } catch (error) {
     ElMessage.error(formatError(error));
   } finally {
@@ -87,68 +159,22 @@ async function loadStats() {
 }
 
 async function clearBrowsingData() {
-  if (!canClear.value || !window.confirm('清理选中的浏览数据？')) {
+  if (!canClear.value || !window.confirm('清理当前筛选出的站点缓存？不会清理 Cookie、LocalStorage 或登录状态。')) {
     return;
   }
 
   try {
     clearing.value = true;
-    const partitionTargets = selectedPartition.value
-      ? [selectedPartition.value]
-      : storageStats.value.map((item) => item.partition);
-
-    if (clearHistory.value) {
-      await window.appApi.history.clear({
-        partition: selectedPartition.value || undefined,
-        origin: selectedOrigin.value || undefined,
-      });
-    }
-
-    const storages = selectedStorages();
-    if ((storages.length || clearCache.value) && !partitionTargets.length) {
-      throw new Error('没有可清理的浏览器分区');
-    }
-
-    await Promise.all(partitionTargets.map((partition) => {
-      if (!storages.length && !clearCache.value) {
-        return Promise.resolve();
-      }
-
-      const input: StorageClearDataInput = {
-        partition,
-        origin: selectedOrigin.value || undefined,
-        storages,
-        clearCache: clearCache.value,
-      };
-      return window.appApi.storage.clearData(input);
-    }));
+    const partitions = unique(displayedTargets.value.map((target) => target.partition));
+    await Promise.all(partitions.map((partition) => window.appApi.storage.clearData({ partition })));
 
     await loadStats();
-    ElMessage.success('浏览数据已清理');
+    ElMessage.success('站点缓存已清理');
   } catch (error) {
     ElMessage.error(formatError(error));
   } finally {
     clearing.value = false;
   }
-}
-
-async function getStorageStats(input?: StorageStatsInput) {
-  return window.appApi.storage.stats(input);
-}
-
-function selectedStorages(): BrowserStorageType[] {
-  return [
-    ...(clearCookies.value ? ['cookies' as const] : []),
-    ...(clearStorage.value ? [
-      'filesystem' as const,
-      'indexdb' as const,
-      'localstorage' as const,
-      'shadercache' as const,
-      'websql' as const,
-      'serviceworkers' as const,
-      'cachestorage' as const,
-    ] : []),
-  ];
 }
 
 function sizeText(bytes: number) {
@@ -167,15 +193,64 @@ function sizeText(bytes: number) {
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function dateText(value?: string) {
-  return value ? new Date(value).toLocaleString() : '无历史访问';
+function hourText(value?: string) {
+  if (!value) {
+    return '无历史访问';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '无历史访问';
+  }
+
+  date.setMinutes(0, 0, 0);
+  const end = new Date(date.getTime() + 60 * 60 * 1000);
+  const datePart = date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+  });
+  const startHour = date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const endHour = end.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${datePart} ${startHour} - ${endHour}`;
+}
+
+function siteDisplayTitle(site: Site) {
+  return site.title || new URL(site.url).hostname;
+}
+
+function siteHost(site: Site) {
+  try {
+    return new URL(site.url).hostname;
+  } catch {
+    return site.url;
+  }
+}
+
+function compareTargets(left: CacheTarget, right: CacheTarget) {
+  if (left.lastVisitedAt && right.lastVisitedAt && left.lastVisitedAt !== right.lastVisitedAt) {
+    return right.lastVisitedAt.localeCompare(left.lastVisitedAt);
+  }
+
+  if (left.lastVisitedAt) {
+    return -1;
+  }
+
+  if (right.lastVisitedAt) {
+    return 1;
+  }
+
+  return siteDisplayTitle(left.site).localeCompare(siteDisplayTitle(right.site));
 }
 
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort();
 }
-
-
 </script>
 
 <template>
@@ -184,7 +259,7 @@ function unique(values: string[]) {
       <header class="clear-data-page__head">
         <span class="clear-data-page__title">
           <Delete theme="outline" size="22" />
-          <strong>清理浏览数据</strong>
+          <strong>清理站点缓存</strong>
         </span>
         <ElButton :loading="loading" @click="loadStats">
           <Refresh theme="outline" size="16" />
@@ -195,39 +270,28 @@ function unique(values: string[]) {
       <section class="clear-data-grid" aria-label="浏览数据清理">
         <aside class="clear-data-panel">
           <label class="clear-data-field">
-            <span>分区</span>
-            <ElSelect v-model="selectedPartition" clearable filterable placeholder="全部分区">
+            <span>站点</span>
+            <ElSelect v-model="selectedSiteId" clearable filterable placeholder="全部站点">
               <ElOption
-                v-for="item in storageStats"
-                :key="item.partition"
-                :label="item.partition"
-                :value="item.partition"
+                v-for="site in siteOptions"
+                :key="site.id"
+                :label="siteDisplayTitle(site)"
+                :value="site.id"
               />
             </ElSelect>
           </label>
 
           <label class="clear-data-field">
-            <span>来源</span>
-            <ElInput v-model="originSearch" clearable placeholder="搜索来源">
+            <span>搜索</span>
+            <ElInput v-model="searchText" clearable placeholder="搜索站点或会话">
               <template #prefix>
                 <Search theme="outline" size="15" />
               </template>
             </ElInput>
-            <ElSelect v-model="selectedOrigin" clearable filterable placeholder="全部来源">
-              <ElOption
-                v-for="origin in originOptions"
-                :key="origin"
-                :label="origin"
-                :value="origin"
-              />
-            </ElSelect>
           </label>
 
-          <div class="clear-data-options" aria-label="清理项目">
-            <ElCheckbox v-model="clearHistory">历史记录</ElCheckbox>
-            <ElCheckbox v-model="clearCookies">Cookie</ElCheckbox>
-            <ElCheckbox v-model="clearCache">缓存</ElCheckbox>
-            <ElCheckbox v-model="clearStorage">本地存储</ElCheckbox>
+          <div class="clear-data-note">
+            仅清理 HTTP 缓存，不会清理 Cookie、LocalStorage、IndexedDB 或历史记录。
           </div>
 
           <ElButton
@@ -237,27 +301,27 @@ function unique(values: string[]) {
             @click="clearBrowsingData"
           >
             <Delete theme="outline" size="16" />
-            清理
+            清理缓存
           </ElButton>
         </aside>
 
-        <section class="clear-data-content" aria-label="浏览数据统计">
+        <section class="clear-data-content" aria-label="站点缓存统计">
           <div class="clear-data-summary">
             <span>
-              <strong>{{ displayedStats.length }}</strong>
-              分区
+              <strong>{{ totalSiteCount }}</strong>
+              站点
             </span>
             <span>
-              <strong>{{ totalOriginCount }}</strong>
-              来源
+              <strong>{{ visibleTargetCount }}</strong>
+              会话
+            </span>
+            <span>
+              <strong>{{ selectedCacheCount }}</strong>
+              有缓存
             </span>
             <span>
               <strong>{{ totalHistoryCount }}</strong>
-              历史
-            </span>
-            <span>
-              <strong>{{ totalCookieCount }}</strong>
-              Cookie
+              访问记录
             </span>
             <span>
               <strong>{{ sizeText(totalCacheBytes) }}</strong>
@@ -265,33 +329,35 @@ function unique(values: string[]) {
             </span>
           </div>
 
-          <p v-if="!displayedStats.length" class="clear-data-empty">
-            暂无可展示的浏览数据
+          <p v-if="!groupedTargets.length" class="clear-data-empty">
+            暂无可展示的站点缓存
           </p>
 
           <article
-            v-for="partitionStats in displayedStats"
-            :key="partitionStats.partition"
-            class="partition-block"
+            v-for="group in groupedTargets"
+            :key="group.site.id"
+            class="site-cache-block"
           >
             <header>
-              <strong>{{ partitionStats.partition }}</strong>
-              <span>{{ partitionStats.originCount }} 个来源 · {{ sizeText(partitionStats.cacheBytes) }} 缓存</span>
+              <span class="site-cache-block__title">
+                <strong>{{ siteDisplayTitle(group.site) }}</strong>
+                <small>{{ siteHost(group.site) }}</small>
+              </span>
+              <span>{{ group.targets.length }} 个会话 · {{ sizeText(group.cacheBytes) }} 缓存</span>
             </header>
 
-            <div class="origin-list">
+            <div class="site-cache-list">
               <div
-                v-for="origin in partitionStats.origins"
-                :key="`${partitionStats.partition}:${origin.origin}`"
-                class="origin-row"
+                v-for="target in group.targets"
+                :key="target.partition"
+                class="site-cache-row"
               >
-                <span class="origin-row__main">
-                  <strong>{{ origin.origin }}</strong>
-                  <small>{{ dateText(origin.lastVisitedAt) }}</small>
+                <span class="site-cache-row__main">
+                  <strong>{{ target.session.name }}</strong>
+                  <small>{{ hourText(target.lastVisitedAt) }}</small>
                 </span>
-                <span>{{ origin.historyCount }} 历史</span>
-                <span>{{ origin.cookieCount }} Cookie</span>
-                <span>{{ sizeText(origin.cookieBytes) }}</span>
+                <span>{{ target.historyCount }} 次访问</span>
+                <span>{{ sizeText(target.cacheBytes) }}</span>
               </div>
             </div>
           </article>
@@ -320,8 +386,8 @@ function unique(values: string[]) {
 .clear-data-page__head,
 .clear-data-page__title,
 .clear-data-summary,
-.partition-block header,
-.origin-row {
+.site-cache-block header,
+.site-cache-row {
   display: flex;
   align-items: center;
 }
@@ -345,7 +411,7 @@ function unique(values: string[]) {
 
 .clear-data-panel,
 .clear-data-content,
-.partition-block {
+.site-cache-block {
   border: 1px solid #dadce0;
   border-radius: 8px;
   background: #ffffff;
@@ -369,9 +435,13 @@ function unique(values: string[]) {
   font-weight: 600;
 }
 
-.clear-data-options {
-  display: grid;
-  gap: 6px;
+.clear-data-note {
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: #f1f8f4;
+  color: #1e5f3c;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .clear-data-content {
@@ -413,37 +483,52 @@ function unique(values: string[]) {
   text-align: center;
 }
 
-.partition-block {
+.site-cache-block {
   overflow: hidden;
 }
 
-.partition-block header {
+.site-cache-block header {
   justify-content: space-between;
   gap: 14px;
   border-bottom: 1px solid #edf0f2;
   padding: 12px 14px;
 }
 
-.partition-block header strong {
+.site-cache-block__title {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.site-cache-block header strong,
+.site-cache-block header small {
   min-width: 0;
   overflow: hidden;
-  color: #202124;
-  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.partition-block header span {
+.site-cache-block header strong {
+  color: #202124;
+  font-size: 14px;
+}
+
+.site-cache-block header small {
+  color: #7a8087;
+  font-size: 11px;
+}
+
+.site-cache-block header > span:not(.site-cache-block__title) {
   flex: 0 0 auto;
   color: #5f6368;
   font-size: 12px;
 }
 
-.origin-list {
+.site-cache-list {
   display: grid;
 }
 
-.origin-row {
+.site-cache-row {
   min-width: 0;
   gap: 14px;
   padding: 11px 14px;
@@ -451,36 +536,36 @@ function unique(values: string[]) {
   font-size: 12px;
 }
 
-.origin-row + .origin-row {
+.site-cache-row + .site-cache-row {
   border-top: 1px solid #f1f3f4;
 }
 
-.origin-row__main {
+.site-cache-row__main {
   display: grid;
   min-width: 0;
   flex: 1 1 auto;
   gap: 3px;
 }
 
-.origin-row__main strong,
-.origin-row__main small {
+.site-cache-row__main strong,
+.site-cache-row__main small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.origin-row__main strong {
+.site-cache-row__main strong {
   color: #202124;
   font-size: 13px;
 }
 
-.origin-row__main small {
+.site-cache-row__main small {
   color: #7a8087;
   font-size: 11px;
 }
 
-.origin-row > span:not(.origin-row__main) {
+.site-cache-row > span:not(.site-cache-row__main) {
   flex: 0 0 auto;
 }
 </style>
