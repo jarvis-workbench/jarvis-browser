@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { computed, nextTick, ref } from 'vue';
-import type { AppUpdateStatus, BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, OpenSessionSyncDialogInput, SessionSyncApplyImportInput, SessionSyncExportInput, SessionSyncPreviewImportInput, Site, SiteExtension, SiteSession } from '../../shared/types';
+import type { AppUpdateStatus, AutomationBridgeSettings, AutomationBridgeStatus, BrowserInternalPageId, BrowserRect, BrowserState, BrowserTab, DownloadSettings, DownloadState, OpenSessionSyncDialogInput, SessionSyncApplyImportInput, SessionSyncExportInput, SessionSyncPreviewImportInput, Site, SiteExtension, SiteSession } from '../../shared/types';
 import { useBrowserExtensions } from './browser-extensions';
 import { useBrowserScripts } from './browser-scripts';
 import { downloadsTabId, homeTabId, settingsTabId, type InternalPageTabId, useBrowserTabs } from './browser-tabs';
@@ -22,6 +22,7 @@ export const useBrowserStore = defineStore('browser', () => {
   const statusMessage = ref('准备就绪');
   const downloads = ref<DownloadState[]>([]);
   const downloadSettings = ref<DownloadSettings | null>(null);
+  const automationBridgeStatus = ref<AutomationBridgeStatus | null>(null);
   const appUpdateStatus = ref<AppUpdateStatus>({
     phase: 'idle',
     currentVersion: '',
@@ -37,6 +38,7 @@ export const useBrowserStore = defineStore('browser', () => {
   });
   const sessionSyncHadEmbeddedView = ref(false);
   const lastBrowserBounds = ref<BrowserRect | null>(null);
+  let removeEventListeners: (() => void) | undefined;
   let pendingBounds: { element: HTMLElement; insetLeft: number; insetRight: number } | undefined;
   let boundsFrame: number | undefined;
 
@@ -75,6 +77,7 @@ export const useBrowserStore = defineStore('browser', () => {
 
   async function loadSettings() {
     downloadSettings.value = await window.appApi.settings.get();
+    automationBridgeStatus.value = await window.appApi.settings.getAutomationBridge();
   }
 
   async function loadUpdateStatus() {
@@ -361,6 +364,16 @@ export const useBrowserStore = defineStore('browser', () => {
     return downloadSettings.value;
   }
 
+  async function updateAutomationBridge(input: Partial<Pick<AutomationBridgeSettings, 'enabled' | 'port'>>) {
+    automationBridgeStatus.value = await window.appApi.settings.updateAutomationBridge(input);
+    return automationBridgeStatus.value;
+  }
+
+  async function regenerateAutomationBridgeToken() {
+    automationBridgeStatus.value = await window.appApi.settings.regenerateAutomationBridgeToken();
+    return automationBridgeStatus.value;
+  }
+
   async function checkForUpdates() {
     appUpdateStatus.value = await window.appApi.updates.checkForUpdates();
     statusMessage.value = updateStatusMessage(appUpdateStatus.value);
@@ -510,6 +523,10 @@ export const useBrowserStore = defineStore('browser', () => {
   }
 
   function bindEvents() {
+    if (removeEventListeners) {
+      return removeEventListeners;
+    }
+
     const removeBrowserListener = window.appApi.onBrowserStateChanged((state) => {
       tabs.setTabState(state);
 
@@ -544,7 +561,9 @@ export const useBrowserStore = defineStore('browser', () => {
       if (isNewDownload) {
         unacknowledgedDownloadCount.value += 1;
       }
-      if (download.state === 'progressing') {
+      if (download.state === 'queued') {
+        statusMessage.value = `排队中：${download.filename}`;
+      } else if (download.state === 'progressing') {
         statusMessage.value = download.paused ? `下载已暂停：${download.filename}` : `正在下载：${download.filename}`;
       } else if (download.state === 'completed') {
         statusMessage.value = `下载完成：${download.filename}`;
@@ -567,7 +586,7 @@ export const useBrowserStore = defineStore('browser', () => {
     });
     void syncTabs();
 
-    return () => {
+    removeEventListeners = () => {
       removeBrowserListener();
       removeTabsListener();
       removeMetadataListener();
@@ -577,7 +596,9 @@ export const useBrowserStore = defineStore('browser', () => {
       removeDownloadListener();
       removeSessionSyncListener();
       removeUpdateListener();
+      removeEventListeners = undefined;
     };
+    return removeEventListeners;
   }
 
   function patchSite(siteId: string, patch: Partial<Site>) {
@@ -713,11 +734,12 @@ export const useBrowserStore = defineStore('browser', () => {
     statusMessage,
     downloads,
     downloadSettings,
+    automationBridgeStatus,
     appUpdateStatus,
     lastDownloadUpdatedAt,
     unacknowledgedDownloadCount,
     sessionSyncDialog,
-    activeDownloads: computed(() => downloads.value.filter((download) => download.state === 'progressing')),
+    activeDownloads: computed(() => downloads.value.filter((download) => download.state === 'progressing' || download.state === 'queued')),
     selectedSite,
     selectedSession: tabs.selectedSession,
     openSessionTabs: tabs.openSessionTabs,
@@ -765,6 +787,8 @@ export const useBrowserStore = defineStore('browser', () => {
     clearDownloads,
     acknowledgeDownloads,
     updateDownloadSettings,
+    updateAutomationBridge,
+    regenerateAutomationBridgeToken,
     selectDownloadPath,
     checkForUpdates,
     downloadUpdate,

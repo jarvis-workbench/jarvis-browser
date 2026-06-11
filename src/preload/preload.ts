@@ -124,6 +124,9 @@ const appApi: AppApi = {
     get: () => invoke<DownloadSettings>("settings:get"),
     update: (input) => invoke("settings:update", input),
     selectDownloadPath: () => invoke("settings:select-download-path"),
+    getAutomationBridge: () => invoke("settings:get-automation-bridge"),
+    updateAutomationBridge: (input) => invoke("settings:update-automation-bridge", input),
+    regenerateAutomationBridgeToken: () => invoke("settings:regenerate-automation-bridge-token"),
   },
   updates: {
     getStatus: () => invoke<AppUpdateStatus>("updates:get-status"),

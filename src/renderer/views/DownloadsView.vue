@@ -19,6 +19,7 @@ const browser = useBrowserStore();
 const groupedDownloads = computed(() => browser.downloads);
 
 onMounted(async () => {
+  browser.bindEvents();
   await browser.loadDownloads();
 });
 
@@ -39,6 +40,10 @@ function progress(download: DownloadState) {
 }
 
 function statusText(download: DownloadState) {
+  if (download.state === 'queued') {
+    return '排队中';
+  }
+
   if (download.state === 'completed') {
     return '已完成';
   }
@@ -87,7 +92,7 @@ function canOpen(download: DownloadState) {
 }
 
 function canControl(download: DownloadState) {
-  return download.state === 'progressing';
+  return download.state === 'progressing' || download.state === 'queued';
 }
 
 
@@ -137,6 +142,7 @@ function canControl(download: DownloadState) {
             v-if="canControl(download) && !download.paused"
             type="button"
             title="暂停"
+            :disabled="download.state === 'queued'"
             @click="run(() => browser.pauseDownload(download))"
           >
             <Pause theme="outline" size="16" />

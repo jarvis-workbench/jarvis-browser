@@ -134,6 +134,10 @@ export function createAppMenuItems() {
 }
 
 function downloadStateLabel(download: DownloadState) {
+  if (download.state === "queued") {
+    return "排队中";
+  }
+
   if (download.state === "progressing") {
     return download.paused ? "已暂停" : "下载中";
   }

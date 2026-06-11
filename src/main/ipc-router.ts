@@ -1,10 +1,12 @@
 import { dialog, ipcMain } from "electron";
 import type {
   AppApi,
+  AutomationBridgeSettings,
   BrowserRect,
   CookieRemoveDetails,
   CookieSetDetails,
 } from "../shared/types";
+import { AutomationBridge } from "./automation-bridge";
 import { BrowserHost } from "./browser-host";
 import { parseBrowserOverlayAction } from "./browser-overlay-menu";
 import { getElectronSession } from "./electron-session-manager";
@@ -23,6 +25,7 @@ export class IpcRouter {
     private readonly historyManager: HistoryManager,
     private readonly storageManager: StorageManager,
     private readonly updateManager: UpdateManager,
+    private readonly automationBridge: AutomationBridge,
   ) {
     this.sessionSyncManager = new SessionSyncManager(store, browserHost);
   }
@@ -278,6 +281,18 @@ export class IpcRouter {
         defaultPath: this.store.getDownloadSettings().downloadPath,
       });
       return result.canceled ? undefined : result.filePaths[0];
+    });
+    this.route("settings:get-automation-bridge", () => this.automationBridge.getStatus());
+    this.route(
+      "settings:update-automation-bridge",
+      async (_event, input: Partial<Pick<AutomationBridgeSettings, "enabled" | "port">>) => {
+        const settings = await this.store.updateAutomationBridgeSettings(input);
+        return this.automationBridge.applySettings(settings);
+      },
+    );
+    this.route("settings:regenerate-automation-bridge-token", async () => {
+      const settings = await this.store.regenerateAutomationBridgeToken();
+      return this.automationBridge.applySettings(settings);
     });
 
     // Updates

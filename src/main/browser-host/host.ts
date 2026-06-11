@@ -1,6 +1,15 @@
 import { BrowserWindow, WebContentsView, session as electronSession, shell } from "electron";
 import { join } from "node:path";
 import type {
+  AutomationDomQueryInput,
+  AutomationDomQueryResult,
+  AutomationDomSnapshotInput,
+  AutomationDomSnapshotResult,
+  AutomationEvaluateInput,
+  AutomationEvaluateResult,
+  AutomationTabInfo,
+  AutomationTelegramInput,
+  AutomationTelegramResult,
   BrowserInternalPageId,
   BrowserNavigationResult,
   BrowserRect,
@@ -9,6 +18,7 @@ import type {
   BrowserTabKind,
   CookieRemoveDetails,
   CookieSetDetails,
+  DownloadState,
 } from "../../shared/types";
 import { clampBrowserBounds, defaultBrowserBounds } from "../browser-bounds";
 import { DownloadManager } from "../download-manager";
@@ -84,7 +94,7 @@ export class BrowserHost {
   ) {
     this.viewRegistry = new ViewRegistry(window, this.views, () => this.bounds);
     this.browserOverlayHost = new BrowserOverlayHost(window);
-    this.downloadManager = new DownloadManager(window, store);
+    this.downloadManager = new DownloadManager(window, store, (download) => this.emitDownloadUpdateToInternalPages(download));
     this.extensionRuntime = new ExtensionRuntime(window, store, (key, targetSession) => {
       this.downloadManager.bindSession(key, targetSession);
     });
@@ -481,6 +491,79 @@ export class BrowserHost {
     };
   }
 
+  listAutomationTabs(): AutomationTabInfo[] {
+    return [...this.tabs.values()]
+      .map((tab) => {
+        const view = this.views.get(tab.id);
+        return view && !view.webContents.isDestroyed()
+          ? this.toAutomationTabInfo(tab, view)
+          : undefined;
+      })
+      .filter((tab): tab is AutomationTabInfo => Boolean(tab));
+  }
+
+  getAutomationActiveTab(): AutomationTabInfo | undefined {
+    const target = this.resolveAutomationTarget(undefined, false);
+    return target ? this.toAutomationTabInfo(target.tab, target.view) : undefined;
+  }
+
+  async evaluateAutomation(input: AutomationEvaluateInput): Promise<AutomationEvaluateResult> {
+    const { tab, view } = this.resolveAutomationTarget(input.tabId);
+    try {
+      const value = await view.webContents.executeJavaScript(
+        createAutomationEvaluationCode(input),
+        true,
+      );
+      return {
+        ok: true,
+        tab: this.toAutomationTabInfo(tab, view),
+        value,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        tab: this.toAutomationTabInfo(tab, view),
+        error: errorToAutomationError(error),
+      };
+    }
+  }
+
+  async queryAutomationDom(input: AutomationDomQueryInput): Promise<AutomationDomQueryResult> {
+    const { tab, view } = this.resolveAutomationTarget(input.tabId);
+    const result = await view.webContents.executeJavaScript(
+      createAutomationDomQueryCode(input),
+      true,
+    ) as Omit<AutomationDomQueryResult, "tab">;
+    return {
+      ...result,
+      tab: this.toAutomationTabInfo(tab, view),
+    };
+  }
+
+  async snapshotAutomationDom(input: AutomationDomSnapshotInput = {}): Promise<AutomationDomSnapshotResult> {
+    const { tab, view } = this.resolveAutomationTarget(input.tabId);
+    const result = await view.webContents.executeJavaScript(
+      createAutomationDomSnapshotCode(input),
+      true,
+    ) as Omit<AutomationDomSnapshotResult, "tab">;
+    return {
+      ...result,
+      tab: this.toAutomationTabInfo(tab, view),
+    };
+  }
+
+  async runTelegramAutomation(input: AutomationTelegramInput = {}): Promise<AutomationTelegramResult> {
+    const { tab, view } = this.resolveAutomationTarget(input.tabId);
+    const result = await view.webContents.executeJavaScript(
+      createTelegramAutomationCode(input),
+      true,
+    ) as Omit<AutomationTelegramResult, "tab">;
+    return {
+      ...result,
+      tab: this.toAutomationTabInfo(tab, view),
+    };
+  }
+
   emitSiteMetadataUpdated() {
     this.emitMetadataUpdate();
   }
@@ -617,7 +700,9 @@ export class BrowserHost {
     await this.openToolMenuOverlay({
       key: "downloads-bubble",
       title: "下载内容",
-      subtitle: downloads.some((download) => download.state === "progressing") ? "正在下载" : "最近下载",
+      subtitle: downloads.some((download) => download.state === "progressing" || download.state === "queued")
+        ? "正在下载"
+        : "最近下载",
       anchor: input.anchor,
       width: 320,
       items: createDownloadMenuItems(downloads),
@@ -735,6 +820,21 @@ export class BrowserHost {
 
   showDownloadInFolder(downloadId: string) {
     return this.downloadManager.showInFolder(downloadId);
+  }
+
+  private emitDownloadUpdateToInternalPages(download: DownloadState) {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.kind !== "internal" || tab.internalPageId !== "downloads") {
+        continue;
+      }
+
+      const view = this.views.get(tabId);
+      if (!view || view.webContents.isDestroyed()) {
+        continue;
+      }
+
+      view.webContents.send("download:updated", download);
+    }
   }
 
   handleBrowserShortcut(input: Electron.Input) {
@@ -1434,6 +1534,33 @@ export class BrowserHost {
     return changed;
   }
 
+  private resolveAutomationTarget(tabId?: string, required?: true): { tab: BrowserTab; view: WebContentsView };
+  private resolveAutomationTarget(tabId?: string, required?: false): { tab: BrowserTab; view: WebContentsView } | undefined;
+  private resolveAutomationTarget(tabId?: string, required = true) {
+    const tab = tabId ? this.tabs.get(tabId) : this.requireActiveTabOrUndefined();
+    const view = tab ? this.views.get(tab.id) : undefined;
+    if (tab && view && !view.webContents.isDestroyed()) {
+      return { tab, view };
+    }
+
+    if (!required) {
+      return undefined;
+    }
+
+    throw new Error(tabId ? "自动化目标标签不存在" : "浏览器标签未打开");
+  }
+
+  private toAutomationTabInfo(tab: BrowserTab, view: WebContentsView): AutomationTabInfo {
+    const state = this.viewStates.get(tab.id);
+    return {
+      ...structuredClone(tab),
+      currentUrl: view.webContents.getURL() || state?.url || tab.url,
+      displayUrl: state?.displayUrl,
+      isLoading: view.webContents.isLoading(),
+      webContentsId: view.webContents.id,
+    };
+  }
+
   private getActiveView() {
     const view = this.getActiveViewOrUndefined();
     if (!view) {
@@ -1555,6 +1682,287 @@ function titleForInternalPage(pageId: BrowserInternalPageId) {
     history: "历史记录",
     "clear-browsing-data": "删除浏览数据",
   }[pageId];
+}
+
+function createAutomationEvaluationCode(input: AutomationEvaluateInput) {
+  const args = JSON.stringify(input.args ?? null);
+  const code = JSON.stringify(input.code);
+  const timeoutMs = normalizeAutomationTimeout(input.timeoutMs, 30_000);
+  return `
+    (() => {
+      const serialize = (value, depth = 0, seen = new WeakSet()) => {
+        if (value === null || value === undefined) {
+          return value;
+        }
+        const type = typeof value;
+        if (type === 'string' || type === 'number' || type === 'boolean') {
+          return value;
+        }
+        if (type === 'bigint') {
+          return value.toString();
+        }
+        if (type === 'function') {
+          return '[Function]';
+        }
+        if (value instanceof Error) {
+          return { name: value.name, message: value.message, stack: value.stack };
+        }
+        if (value instanceof Element) {
+          const rect = value.getBoundingClientRect();
+          return {
+            tagName: value.tagName.toLowerCase(),
+            id: value.id || '',
+            className: String(value.className || ''),
+            text: (value.innerText || value.textContent || '').trim().slice(0, 500),
+            rect: {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            },
+          };
+        }
+        if (seen.has(value)) {
+          return '[Circular]';
+        }
+        if (depth >= 5) {
+          return Array.isArray(value) ? '[Array]' : '[Object]';
+        }
+        seen.add(value);
+        if (Array.isArray(value)) {
+          return value.slice(0, 200).map((item) => serialize(item, depth + 1, seen));
+        }
+        const output = {};
+        for (const [key, item] of Object.entries(value).slice(0, 200)) {
+          output[key] = serialize(item, depth + 1, seen);
+        }
+        return output;
+      };
+      const run = Promise.resolve()
+        .then(() => {
+          const source = ${code};
+          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+          try {
+            return new AsyncFunction('args', 'return (' + source + ')')( ${args} );
+          } catch {
+            return new AsyncFunction('args', source)(${args});
+          }
+        })
+        .then((value) => serialize(value));
+      const timeout = new Promise((_, reject) => {
+        window.setTimeout(() => reject(new Error('Automation evaluation timed out')), ${timeoutMs});
+      });
+      return Promise.race([run, timeout]);
+    })()
+  `;
+}
+
+function createAutomationDomQueryCode(input: AutomationDomQueryInput) {
+  const config = JSON.stringify({
+    selector: input.selector,
+    limit: clampNumber(input.limit, 1, 500, 50),
+    includeHtml: Boolean(input.includeHtml),
+    textMaxLength: clampNumber(input.textMaxLength, 0, 5000, 500),
+  });
+  return `
+    (() => {
+      const config = ${config};
+      const cssEscape = (value) => {
+        if (window.CSS?.escape) {
+          return window.CSS.escape(value);
+        }
+        return String(value).replace(/["\\\\#.:,[\\]>+~*^$|=\\s]/g, '\\\\$&');
+      };
+      const selectorOf = (element) => {
+        if (element.id) {
+          return '#' + cssEscape(element.id);
+        }
+        const parts = [];
+        let current = element;
+        while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.documentElement) {
+          const tag = current.tagName.toLowerCase();
+          const className = String(current.className || '').trim().split(/\\s+/).filter(Boolean).slice(0, 3);
+          let part = tag + className.map((item) => '.' + cssEscape(item)).join('');
+          const parent = current.parentElement;
+          if (parent) {
+            const sameTag = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+            if (sameTag.length > 1) {
+              part += ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')';
+            }
+          }
+          parts.unshift(part);
+          current = parent;
+          if (parts.length >= 6) {
+            break;
+          }
+        }
+        return parts.join(' > ');
+      };
+      const describe = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const attributes = {};
+        for (const attr of Array.from(element.attributes || [])) {
+          attributes[attr.name] = attr.value;
+        }
+        const text = (element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim();
+        return {
+          tagName: element.tagName.toLowerCase(),
+          id: element.id || '',
+          className: String(element.className || ''),
+          text: text.slice(0, config.textMaxLength),
+          selector: selectorOf(element),
+          attributes,
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+          ...(config.includeHtml ? { html: element.outerHTML.slice(0, 5000) } : {}),
+        };
+      };
+      return {
+        pageUrl: location.href,
+        title: document.title,
+        elements: Array.from(document.querySelectorAll(config.selector)).slice(0, config.limit).map(describe),
+      };
+    })()
+  `;
+}
+
+function createAutomationDomSnapshotCode(input: AutomationDomSnapshotInput) {
+  const config = JSON.stringify({
+    selector: input.selector || "body",
+    maxDepth: clampNumber(input.maxDepth, 0, 8, 3),
+    maxChildren: clampNumber(input.maxChildren, 1, 200, 60),
+    textMaxLength: clampNumber(input.textMaxLength, 0, 3000, 240),
+  });
+  return `
+    (() => {
+      const config = ${config};
+      const cssEscape = (value) => window.CSS?.escape
+        ? window.CSS.escape(value)
+        : String(value).replace(/["\\\\#.:,[\\]>+~*^$|=\\s]/g, '\\\\$&');
+      const selectorOf = (element) => {
+        if (element.id) {
+          return '#' + cssEscape(element.id);
+        }
+        const parts = [];
+        let current = element;
+        while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.documentElement) {
+          const tag = current.tagName.toLowerCase();
+          const className = String(current.className || '').trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+          let part = tag + className.map((item) => '.' + cssEscape(item)).join('');
+          const parent = current.parentElement;
+          if (parent) {
+            const sameTag = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+            if (sameTag.length > 1) {
+              part += ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')';
+            }
+          }
+          parts.unshift(part);
+          current = parent;
+          if (parts.length >= 6) {
+            break;
+          }
+        }
+        return parts.join(' > ');
+      };
+      const describe = (element, depth = 0) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const text = (element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim();
+        const attributes = {};
+        for (const attr of Array.from(element.attributes || [])) {
+          if (['id', 'class', 'role', 'aria-label', 'title', 'href', 'src', 'alt', 'type', 'data-media-id'].includes(attr.name)) {
+            attributes[attr.name] = attr.value;
+          }
+        }
+        const item = {
+          tagName: element.tagName.toLowerCase(),
+          id: element.id || '',
+          className: String(element.className || ''),
+          text: text.slice(0, config.textMaxLength),
+          selector: selectorOf(element),
+          attributes,
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+        };
+        if (depth < config.maxDepth) {
+          item.children = Array.from(element.children)
+            .slice(0, config.maxChildren)
+            .map((child) => describe(child, depth + 1));
+        }
+        return item;
+      };
+      const roots = Array.from(document.querySelectorAll(config.selector)).slice(0, config.maxChildren);
+      return {
+        pageUrl: location.href,
+        title: document.title,
+        roots: roots.map((element) => describe(element)),
+      };
+    })()
+  `;
+}
+
+function createTelegramAutomationCode(input: AutomationTelegramInput) {
+  const request = JSON.stringify({
+    requestId: createId(),
+    action: input.action || "scan",
+    ids: Array.isArray(input.ids) ? input.ids : [],
+  });
+  const timeoutMs = normalizeAutomationTimeout(input.timeoutMs, 15_000);
+  return `
+    (() => new Promise((resolve) => {
+      const request = ${request};
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener('jarvis-tg-automation-result', handleResult);
+        resolve({
+          ok: false,
+          error: 'Jarvis TG Downloader automation hook did not respond',
+        });
+      }, ${timeoutMs});
+      function handleResult(event) {
+        const detail = event.detail || {};
+        if (detail.requestId !== request.requestId) {
+          return;
+        }
+        window.clearTimeout(timeout);
+        window.removeEventListener('jarvis-tg-automation-result', handleResult);
+        resolve({
+          ok: Boolean(detail.ok),
+          result: detail.result,
+          error: detail.error,
+        });
+      }
+      window.addEventListener('jarvis-tg-automation-result', handleResult);
+      window.dispatchEvent(new CustomEvent('jarvis-tg-automation', { detail: request }));
+    }))()
+  `;
+}
+
+function normalizeAutomationTimeout(value: unknown, fallback: number) {
+  return clampNumber(value, 500, 120_000, fallback);
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const numberValue = typeof value === "number" ? Math.floor(value) : Number(value);
+  if (!Number.isFinite(numberValue)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, numberValue));
+}
+
+function errorToAutomationError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return {
+    message: String(error),
+  };
 }
 
 

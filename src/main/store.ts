@@ -1,7 +1,8 @@
 import { app } from "electron";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative } from "node:path";
-import type { DownloadSettings, DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
+import type { AutomationBridgeSettings, DownloadSettings, DownloadState, JarvisScript, Site, SiteExtension, SiteSession } from "../shared/types";
 import { dataPaths } from "./data-paths";
 import { readExtensionManifestMetadata } from "./extension-manifest";
 import { createSiteFaviconInternalUrl } from "./internal-protocol";
@@ -14,6 +15,7 @@ type ProfileFile = {
   name: string;
   createdAt: string;
   downloadSettings?: Partial<DownloadSettings>;
+  automationBridge?: Partial<AutomationBridgeSettings>;
 };
 
 const now = () => new Date().toISOString();
@@ -48,6 +50,7 @@ export class MetadataStore {
   private downloads: DownloadState[] = [];
   private profile: ProfileFile = createDefaultProfile();
   private downloadSettings: DownloadSettings = createDefaultDownloadSettings();
+  private automationBridgeSettings: AutomationBridgeSettings = createDefaultAutomationBridgeSettings();
   private loaded = false;
   private writeQueue = Promise.resolve();
 
@@ -59,6 +62,7 @@ export class MetadataStore {
     await ensureBaseDirectories();
     this.profile = await readJson<ProfileFile>(dataPaths.profileFile, createDefaultProfile());
     this.downloadSettings = normalizeDownloadSettings(this.profile.downloadSettings);
+    this.automationBridgeSettings = normalizeAutomationBridgeSettings(this.profile.automationBridge);
     this.globalExtensions = await hydrateExtensionsMetadata(
       await readJson<SiteExtension[]>(dataPaths.global.extensionsIndexFile, []),
     );
@@ -87,6 +91,10 @@ export class MetadataStore {
     return structuredClone(this.downloadSettings);
   }
 
+  getAutomationBridgeSettings() {
+    return structuredClone(this.automationBridgeSettings);
+  }
+
   async updateDownloadSettings(input: Partial<DownloadSettings>) {
     this.downloadSettings = normalizeDownloadSettings({
       ...this.downloadSettings,
@@ -98,6 +106,32 @@ export class MetadataStore {
     };
     await this.persistProfile();
     return this.getDownloadSettings();
+  }
+
+  async updateAutomationBridgeSettings(input: Partial<Pick<AutomationBridgeSettings, "enabled" | "port">>) {
+    this.automationBridgeSettings = normalizeAutomationBridgeSettings({
+      ...this.automationBridgeSettings,
+      ...input,
+    });
+    this.profile = {
+      ...this.profile,
+      automationBridge: this.automationBridgeSettings,
+    };
+    await this.persistProfile();
+    return this.getAutomationBridgeSettings();
+  }
+
+  async regenerateAutomationBridgeToken() {
+    this.automationBridgeSettings = {
+      ...this.automationBridgeSettings,
+      token: createAutomationBridgeToken(),
+    };
+    this.profile = {
+      ...this.profile,
+      automationBridge: this.automationBridgeSettings,
+    };
+    await this.persistProfile();
+    return this.getAutomationBridgeSettings();
   }
 
   listGlobalExtensions() {
@@ -801,6 +835,7 @@ function createDefaultProfile(): ProfileFile {
     name: "default",
     createdAt: now(),
     downloadSettings: createDefaultDownloadSettings(),
+    automationBridge: createDefaultAutomationBridgeSettings(),
   };
 }
 
@@ -819,6 +854,38 @@ function normalizeDownloadSettings(input?: Partial<DownloadSettings>): DownloadS
       : fallback.downloadPath,
     askWhereToSaveBeforeDownloading: Boolean(input?.askWhereToSaveBeforeDownloading),
   };
+}
+
+function createDefaultAutomationBridgeSettings(): AutomationBridgeSettings {
+  return {
+    enabled: false,
+    port: 17361,
+    token: createAutomationBridgeToken(),
+  };
+}
+
+function normalizeAutomationBridgeSettings(input?: Partial<AutomationBridgeSettings>): AutomationBridgeSettings {
+  const fallback = createDefaultAutomationBridgeSettings();
+  return {
+    enabled: Boolean(input?.enabled),
+    port: normalizeAutomationBridgePort(input?.port, fallback.port),
+    token: typeof input?.token === "string" && input.token.trim().length >= 16
+      ? input.token.trim()
+      : fallback.token,
+  };
+}
+
+function normalizeAutomationBridgePort(value: unknown, fallback: number) {
+  const port = typeof value === "number" ? Math.floor(value) : Number(value);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    return fallback;
+  }
+
+  return port;
+}
+
+function createAutomationBridgeToken() {
+  return randomBytes(24).toString("base64url");
 }
 
 function normalizeDownloadState(input: Partial<DownloadState>): DownloadState {

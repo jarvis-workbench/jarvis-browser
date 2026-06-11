@@ -12,6 +12,12 @@
   const mediaByKey = new Map();
   const elementIds = new WeakMap();
   const recentRuntimeMedia = [];
+  const pendingDownloadIds = new Set();
+  const mediaProgress = new Map();
+  const pageDownloadListeners = new Map();
+  const videoDownloadStartTimeoutMs = 8000;
+  const videoDownloadFinishTimeoutMs = 6 * 60 * 60 * 1000;
+  let downloadQueueTail = Promise.resolve();
   let sequence = 0;
   let scanTimer = 0;
 
@@ -68,6 +74,28 @@
     }
 
     return false;
+  });
+
+  window.addEventListener("jarvis-tg-automation", (event) => {
+    const detail = event.detail || {};
+    const requestId = detail.requestId || `${Date.now()}-${Math.random()}`;
+
+    handleAutomationRequest(detail).then(
+      (result) => {
+        window.dispatchEvent(new CustomEvent("jarvis-tg-automation-result", {
+          detail: { requestId, ok: true, result },
+        }));
+      },
+      (error) => {
+        window.dispatchEvent(new CustomEvent("jarvis-tg-automation-result", {
+          detail: {
+            requestId,
+            ok: false,
+            error: String(error?.message || error),
+          },
+        }));
+      },
+    );
   });
 
   function injectPageRuntime() {
@@ -148,21 +176,66 @@
         pointer-events: auto;
       }
 
+      .jarvis-tg-progress {
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        z-index: 2147483646;
+        display: none;
+        min-width: 54px;
+        max-width: calc(100% - 8px);
+        padding: 3px 5px 4px;
+        box-sizing: border-box;
+        border-radius: 5px;
+        color: #172033;
+        background: rgba(126, 217, 87, 0.94);
+        box-shadow: 0 1px 5px rgba(15, 23, 42, 0.24);
+        font: 800 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        pointer-events: none;
+      }
+
+      .jarvis-tg-progress.is-active {
+        display: block;
+      }
+
+      .jarvis-tg-progress.is-failed {
+        color: #ffffff;
+        background: rgba(220, 38, 38, 0.94);
+      }
+
+      .album-item > .jarvis-tg-progress {
+        bottom: 29px;
+      }
+
+      .jarvis-tg-progress__bar {
+        display: block;
+        width: 100%;
+        height: 3px;
+        margin-top: 3px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(23, 32, 51, 0.22);
+      }
+
+      .jarvis-tg-progress__fill {
+        display: block;
+        width: var(--jarvis-tg-progress, 0%);
+        height: 100%;
+        border-radius: inherit;
+        background: #172033;
+      }
+
       .jarvis-tg-album-actions {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         align-items: center;
         justify-content: center;
-        width: 100%;
+        width: fit-content;
         max-width: 100%;
         box-sizing: border-box;
-        clear: both;
-        gap: 10px;
-        margin-top: 6px;
-        margin-right: 0;
-        margin-bottom: 16px;
-        margin-left: 0;
-        padding: 4px 0 0;
+        gap: 8px;
+        margin: 6px auto 8px;
+        padding: 0;
         background: transparent;
       }
 
@@ -170,8 +243,9 @@
         display: inline-flex;
         align-items: center;
         gap: 5px;
-        color: #172033;
+        color: #e5f7df;
         font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        white-space: nowrap;
         cursor: pointer;
       }
 
@@ -182,8 +256,34 @@
       }
 
       .jarvis-tg-album-actions .jarvis-tg-album-download {
-        margin-right: auto;
-        margin-left: auto;
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .jarvis-tg-select-action {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 42px;
+        height: 28px;
+        padding: 0 8px;
+        box-sizing: border-box;
+        border: 1px solid rgba(126, 217, 87, 0.74);
+        border-radius: 6px;
+        color: #eaffdf;
+        background: rgba(15, 23, 42, 0.76);
+        font: 800 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+
+      .jarvis-tg-select-action:hover:not(:disabled) {
+        background: rgba(30, 41, 59, 0.9);
+      }
+
+      .jarvis-tg-select-action:disabled {
+        opacity: 0.45;
+        cursor: default;
       }
 
       #${RIGHT_ALL_ID} {
@@ -255,6 +355,7 @@
       }
 
       ensureItemCheckbox(item, media.id);
+      ensureMediaProgress(item, media.id);
       mediaItems.push(media);
     });
 
@@ -275,7 +376,7 @@
       }
 
       const url = elementSource(photo);
-      if (!url) {
+      if (!hasMediaUrl(url)) {
         return;
       }
 
@@ -290,6 +391,7 @@
         context: "chat",
         triggerElement: host || photo,
       });
+      ensureMediaProgress(host || photo, media.id);
       mediaItems.push(media);
     });
     return mediaItems;
@@ -307,10 +409,15 @@
 
     containers.forEach((container) => {
       const video = container.querySelector?.("video") || (container instanceof HTMLVideoElement ? container : null);
-      const url = video ? elementSource(video) : "";
+      const sourceUrl = video ? elementSource(video) : "";
+      const url = hasNetworkMediaUrl(sourceUrl) ? sourceUrl : "";
+      const triggerElement = activationTargetFor(container)
+        || video
+        || container;
       const media = rememberMedia({
         key: elementKey(container, "video"),
         url,
+        previewUrl: url ? "" : sourceUrl,
         type: "video/mp4",
         kind: "video",
         title: "Video",
@@ -318,8 +425,10 @@
         page: location.href,
         context: "chat",
         needsViewer: !url,
-        triggerElement: container,
+        triggerElement,
+        sourceElement: container,
       });
+      ensureMediaProgress(container, media.id);
       mediaItems.push(media);
     });
     return mediaItems;
@@ -334,10 +443,12 @@
 
       const title = textOf(container.querySelector(".audio-title")) || "Telegram audio";
       const audio = container.querySelector("audio");
-      const url = audio ? elementSource(audio) : "";
+      const sourceUrl = audio ? elementSource(audio) : "";
+      const url = hasNetworkMediaUrl(sourceUrl) ? sourceUrl : "";
       const media = rememberMedia({
         key: elementKey(container, "audio"),
         url,
+        previewUrl: url ? "" : sourceUrl,
         type: "audio/mpeg",
         kind: "audio",
         title,
@@ -347,6 +458,7 @@
         needsAudioResolve: !url,
         triggerElement: container.querySelector(".audio-play-icon") || container,
       });
+      ensureMediaProgress(container, media.id);
       mediaItems.push(media);
     });
     return mediaItems;
@@ -360,7 +472,10 @@
     roots.forEach((root) => {
       ensureRightAllButton(root);
       root.querySelectorAll(".media-container").forEach((container) => {
-        mediaFromRightContainer(container);
+        const media = mediaFromRightContainer(container);
+        if (media) {
+          ensureMediaProgress(container, media.id);
+        }
       });
       ensureMonthButtons(root);
     });
@@ -378,31 +493,34 @@
     }
 
     const host = viewer.querySelector(".media-viewer-buttons, .story-viewer, .media-viewer") || viewer;
+    ensureMediaProgress(host, media.id);
     ensureBubbleActions(host, [media]);
   }
 
   function mediaFromAlbumItem(item, index) {
     if (hasVideoMarker(item)) {
       const video = item.querySelector("video");
-      const url = video ? elementSource(video) : "";
+      const previewUrl = video ? elementSource(video) : "";
+      const triggerElement = activationTargetFor(item);
       return rememberMedia({
         key: elementKey(item, `album-video-${index}`),
-        url,
+        previewUrl,
         type: "video/mp4",
         kind: "video",
         title: "Album video",
-        fileName: inferFileName(url, "video/mp4", "telegram-album-video"),
+        fileName: inferFileName(previewUrl, "video/mp4", "telegram-album-video"),
         page: location.href,
         context: "album",
-        needsViewer: !url,
-        triggerElement: item,
+        needsViewer: true,
+        triggerElement,
+        sourceElement: item,
       });
     }
 
     const photo = item.querySelector(".media-photo");
     if (photo) {
       const url = elementSource(photo);
-      if (!url) {
+      if (!hasMediaUrl(url)) {
         return undefined;
       }
 
@@ -425,25 +543,27 @@
   function mediaFromRightContainer(container) {
     if (hasVideoMarker(container)) {
       const video = container.querySelector("video");
-      const url = video ? elementSource(video) : "";
+      const previewUrl = video ? elementSource(video) : "";
+      const triggerElement = activationTargetFor(container);
       return rememberMedia({
         key: elementKey(container, "right-video"),
-        url,
+        previewUrl,
         type: "video/mp4",
         kind: "video",
         title: "Media video",
-        fileName: inferFileName(url, "video/mp4", "telegram-media-video"),
+        fileName: inferFileName(previewUrl, "video/mp4", "telegram-media-video"),
         page: location.href,
         context: "right-panel",
-        needsViewer: !url,
-        triggerElement: container,
+        needsViewer: true,
+        triggerElement,
+        sourceElement: container,
       });
     }
 
     const photo = container.querySelector(".media-photo");
     if (photo) {
       const url = elementSource(photo);
-      if (!url) {
+      if (!hasMediaUrl(url)) {
         return undefined;
       }
 
@@ -466,10 +586,12 @@
   function mediaFromStoryViewer(viewer) {
     const video = viewer.querySelector("video");
     if (video) {
-      const url = elementSource(video);
+      const sourceUrl = elementSource(video);
+      const url = hasNetworkMediaUrl(sourceUrl) ? sourceUrl : "";
       return rememberMedia({
         key: elementKey(viewer, "story-video"),
         url,
+        previewUrl: url ? "" : sourceUrl,
         type: "video/mp4",
         kind: "video",
         title: "Story video",
@@ -487,7 +609,7 @@
     }
 
     const url = elementSource(photo);
-    if (!url) {
+    if (!hasMediaUrl(url)) {
       return undefined;
     }
 
@@ -533,11 +655,42 @@
     item.appendChild(checkbox);
   }
 
+  function ensureMediaProgress(host, mediaId) {
+    if (!host || !mediaId) {
+      return;
+    }
+
+    host.dataset.jarvisTgMediaId = mediaId;
+    if (getComputedStyle(host).position === "static" && !host.style.position) {
+      host.style.position = "relative";
+    }
+
+    let progress = host.querySelector(":scope > .jarvis-tg-progress");
+    if (!progress) {
+      progress = document.createElement("div");
+      progress.className = "jarvis-tg-progress";
+      progress.append(document.createElement("span"), document.createElement("i"));
+      progress.querySelector("i").className = "jarvis-tg-progress__bar";
+      progress.querySelector("i").appendChild(document.createElement("b"));
+      progress.querySelector("b").className = "jarvis-tg-progress__fill";
+      host.appendChild(progress);
+    }
+
+    progress.dataset.mediaId = mediaId;
+    renderMediaProgress(mediaId);
+  }
+
   function ensureBubbleActions(bubble, mediaItems) {
-    const host = bubble.querySelector(":scope .bubble-content");
+    const host = bubble.querySelector(":scope .bubble-content") || bubble;
     if (!host) {
       return;
     }
+
+    bubble.querySelectorAll(".jarvis-tg-album-actions").forEach((node) => {
+      if (node.parentElement !== host) {
+        node.remove();
+      }
+    });
 
     let actions = host.querySelector(":scope > .jarvis-tg-album-actions");
 
@@ -545,28 +698,54 @@
       actions = document.createElement("div");
       actions.className = "jarvis-tg-album-actions";
 
-      const label = document.createElement("label");
-      const all = document.createElement("input");
-      all.type = "checkbox";
-      all.className = "jarvis-tg-select-all";
-      all.checked = true;
-      all.addEventListener("click", (event) => event.stopPropagation());
-      label.append(all, document.createTextNode("All"));
+      const selectAll = document.createElement("button");
+      selectAll.type = "button";
+      selectAll.className = "jarvis-tg-select-action jarvis-tg-select-all-action";
+
+      const clearAll = document.createElement("button");
+      clearAll.type = "button";
+      clearAll.className = "jarvis-tg-select-action jarvis-tg-clear-all-action";
 
       const download = document.createElement("button");
       download.type = "button";
       download.className = `${BATCH_CLASS} jarvis-tg-album-download`;
 
-      actions.append(label, download);
+      actions.append(selectAll, clearAll, download);
       host.appendChild(actions);
+    } else {
+      upgradeBubbleActions(actions);
     }
 
     bindBubbleActions(actions, bubble, mediaItems);
   }
 
+  function upgradeBubbleActions(actions) {
+    actions.querySelectorAll("label").forEach((label) => {
+      if (label.querySelector(".jarvis-tg-select-all")) {
+        label.remove();
+      }
+    });
+
+    let selectAll = actions.querySelector(".jarvis-tg-select-all-action");
+    if (!selectAll) {
+      selectAll = document.createElement("button");
+      selectAll.type = "button";
+      selectAll.className = "jarvis-tg-select-action jarvis-tg-select-all-action";
+      actions.prepend(selectAll);
+    }
+
+    let clearAll = actions.querySelector(".jarvis-tg-clear-all-action");
+    if (!clearAll) {
+      clearAll = document.createElement("button");
+      clearAll.type = "button";
+      clearAll.className = "jarvis-tg-select-action jarvis-tg-clear-all-action";
+      selectAll.after(clearAll);
+    }
+  }
+
   function bindBubbleActions(actions, bubble, mediaItems) {
-    const all = actions.querySelector(".jarvis-tg-select-all");
-    const allLabel = all?.closest("label");
+    const selectAll = actions.querySelector(".jarvis-tg-select-all-action");
+    const clearAll = actions.querySelector(".jarvis-tg-clear-all-action");
     const download = actions.querySelector(".jarvis-tg-album-download");
     actions.jarvisTgBatchState = {
       bubble,
@@ -584,22 +763,26 @@
       const boxes = checkboxes();
       const selectedCount = boxes.filter((checkbox) => checkbox.checked).length;
       const hasOverlayCheckboxes = boxes.length > 0;
-      if (all) {
-        all.checked = hasOverlayCheckboxes && selectedCount === boxes.length;
-        all.indeterminate = selectedCount > 0 && selectedCount < boxes.length;
+      if (selectAll) {
+        selectAll.textContent = "全选";
+        selectAll.hidden = !hasOverlayCheckboxes;
+        selectAll.disabled = !hasOverlayCheckboxes || selectedCount === boxes.length;
       }
-      if (allLabel) {
-        allLabel.hidden = !hasOverlayCheckboxes;
+      if (clearAll) {
+        clearAll.textContent = "取消全选";
+        clearAll.hidden = !hasOverlayCheckboxes;
+        clearAll.disabled = !hasOverlayCheckboxes || selectedCount === 0;
       }
       if (download) {
         if (hasOverlayCheckboxes) {
-          download.textContent = `Download selected (${selectedCount}/${boxes.length})`;
+          download.textContent = `下载已选 (${selectedCount}/${boxes.length})`;
           download.disabled = selectedCount === 0;
         } else {
-          download.textContent = `Download (${currentMediaIds().length})`;
+          download.textContent = `下载 (${currentMediaIds().length})`;
           download.disabled = currentMediaIds().length === 0;
         }
       }
+      renderBatchProgress();
     };
 
     checkboxes().forEach((checkbox) => {
@@ -610,12 +793,27 @@
       checkbox.addEventListener("change", update);
     });
 
-    if (all && !all.dataset.jarvisTgBound) {
-      all.dataset.jarvisTgBound = "1";
-      all.addEventListener("change", () => {
+    if (selectAll && !selectAll.dataset.jarvisTgBound) {
+      selectAll.dataset.jarvisTgBound = "1";
+      selectAll.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
         checkboxes().forEach((checkbox) => {
-          checkbox.checked = all.checked;
-          checkbox.dataset.checked = checkbox.checked ? "true" : "false";
+          checkbox.checked = true;
+          checkbox.dataset.checked = "true";
+        });
+        update();
+      });
+    }
+
+    if (clearAll && !clearAll.dataset.jarvisTgBound) {
+      clearAll.dataset.jarvisTgBound = "1";
+      clearAll.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        checkboxes().forEach((checkbox) => {
+          checkbox.checked = false;
+          checkbox.dataset.checked = "false";
         });
         update();
       });
@@ -626,9 +824,12 @@
       download.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        scan();
         const ids = checkboxes().length ? selectedIds() : currentMediaIds();
         if (ids.length) {
-          downloadByIds(ids);
+          download.disabled = true;
+          download.textContent = `准备下载 (${ids.length})`;
+          downloadByIds(ids).finally(update);
         }
       });
     }
@@ -729,90 +930,209 @@
       return;
     }
 
-    const url = message.url_tent;
-    if (!url) {
+    const sourceUrl = message.url_tent;
+    if (!sourceUrl) {
       return;
     }
+    const url = hasMediaUrl(sourceUrl) ? sourceUrl : "";
+    const kind = kindFromType(message.type_tent || "", sourceUrl);
+    const directUrl = hasDirectDownloadUrl(kind, sourceUrl) ? sourceUrl : "";
 
     const media = rememberMedia({
-      url,
+      url: directUrl,
+      previewUrl: directUrl ? "" : sourceUrl,
       type: message.type_tent || "application/octet-stream",
-      kind: kindFromType(message.type_tent || "", url),
+      kind,
       title: "Popup media",
-      fileName: inferFileName(url, message.type_tent || "", "telegram-media"),
+      fileName: inferFileName(directUrl || sourceUrl, message.type_tent || "", "telegram-media"),
       page: message.current_url_tent || location.href,
       context: "popup",
+      needsViewer: kind === "video" && !directUrl,
+      needsAudioResolve: kind === "audio" && !directUrl,
     });
     await dispatchDownload(media);
   }
 
   async function downloadByIds(ids) {
-    for (const id of ids) {
-      const media = mediaById.get(id);
-      if (!media) {
-        continue;
-      }
-
-      await dispatchDownload(media);
+    scan();
+    const uniqueIds = [...new Set(ids)]
+      .filter((id) => mediaById.has(id) && !pendingDownloadIds.has(id) && !isMediaDownloadActive(id));
+    uniqueIds.forEach((id) => pendingDownloadIds.add(id));
+    uniqueIds.forEach((id) => setMediaProgress(id, { status: "queued", progress: 0 }));
+    if (!uniqueIds.length) {
+      return;
     }
+
+    const run = async () => {
+      for (const id of uniqueIds) {
+        const media = mediaById.get(id);
+        try {
+          if (media) {
+            await dispatchDownload(media);
+            await delay(media.kind === "video" ? 700 : 150);
+          }
+        } catch (error) {
+          console.warn("[Jarvis TG Downloader] item skipped", error);
+        } finally {
+          pendingDownloadIds.delete(id);
+        }
+      }
+    };
+
+    const task = downloadQueueTail.catch(() => undefined).then(run);
+    downloadQueueTail = task.catch(() => undefined);
+    await task;
   }
 
   async function downloadMedia(id) {
-    const media = mediaById.get(id);
-    if (!media) {
-      return;
+    await downloadByIds([id]);
+  }
+
+  async function handleAutomationRequest(detail) {
+    scan();
+    const action = detail.action || "scan";
+    if (action === "download") {
+      await downloadByIds(Array.isArray(detail.ids) ? detail.ids : []);
     }
 
-    await dispatchDownload(media);
+    return {
+      action,
+      items: getPopupRows(),
+      debug: getAutomationDebugInfo(),
+    };
   }
 
   async function dispatchDownload(media) {
-    const resolved = await resolveMedia(media);
-    if (!resolved?.url) {
-      return;
+    const currentMedia = refreshMediaForDownload(media);
+    const resolved = await resolveMedia(currentMedia);
+    if (!hasDirectDownloadUrl(resolved?.kind || media.kind, resolved?.url)) {
+      setMediaProgress(media.id, { status: "failed", progress: 0, label: "失败" });
+      clearMediaProgressLater(media.id, 4000, "failed");
+      rememberMedia({
+        ...currentMedia,
+        url: "",
+        needsViewer: currentMedia.kind === "video" ? true : currentMedia.needsViewer,
+        needsAudioResolve: currentMedia.kind === "audio" ? true : currentMedia.needsAudioResolve,
+      });
+      console.warn("[Jarvis TG Downloader] media request URL was not captured", {
+        id: media.id,
+        kind: currentMedia.kind,
+        context: currentMedia.context,
+        debug: mediaDebugInfo(currentMedia),
+      });
+      return false;
     }
 
-    const updated = rememberMedia({ ...media, ...resolved, url: resolved.url });
+    const updated = rememberMedia({ ...currentMedia, ...resolved, url: resolved.url });
+    setMediaProgress(updated.id, { status: "starting", progress: 0 });
+    const stopProgressListener = ensurePageDownloadProgressListener(updated.id);
+    const shouldWaitForPageDownload = updated.kind === "video" && hasNetworkMediaUrl(updated.url);
+    const started = shouldWaitForPageDownload
+      ? waitForPageDownloadStatus(updated.id, new Set(["queued", "downloading", "completed", "failed"]), videoDownloadStartTimeoutMs)
+      : undefined;
+
     document.dispatchEvent(new CustomEvent("video_download", {
       detail: {
         type: "single",
         video_src: toDownloadPayload(updated),
       },
     }));
+
+    const startedStatus = started ? await started : undefined;
+    if (resolved.closeViewerAfterDispatch && (startedStatus || !shouldWaitForPageDownload)) {
+      await delay(600);
+      await closeViewer();
+    }
+    if (startedStatus?.status === "failed") {
+      setMediaProgress(updated.id, { status: "failed", progress: 0, label: "失败" });
+      clearMediaProgressLater(updated.id, 4000, "failed");
+      console.warn("[Jarvis TG Downloader] page download failed", startedStatus.error || startedStatus);
+      return false;
+    }
+
+    if (!shouldWaitForPageDownload) {
+      setMediaProgress(updated.id, { status: "completed", progress: 100 });
+      clearMediaProgressLater(updated.id, 1800, "completed");
+      stopProgressListener();
+    }
+    return true;
+  }
+
+  function refreshMediaForDownload(media) {
+    scan();
+    const latest = mediaById.get(media.id) || media;
+    const host = document.querySelector(`[data-jarvis-tg-media-id="${cssEscape(media.id)}"]`);
+    if (!host) {
+      return latest;
+    }
+
+    const albumItem = host.closest?.(".album-item");
+    if (albumItem) {
+      const siblings = Array.from(albumItem.parentElement?.querySelectorAll(".album-item") || []);
+      const refreshed = mediaFromAlbumItem(albumItem, Math.max(0, siblings.indexOf(albumItem)));
+      return refreshed?.id === media.id ? refreshed : latest;
+    }
+
+    const rightContainer = host.closest?.("#column-right .media-container");
+    if (rightContainer) {
+      const refreshed = mediaFromRightContainer(rightContainer);
+      return refreshed?.id === media.id ? refreshed : latest;
+    }
+
+    const bubble = host.closest?.(".bubble-content-wrapper");
+    if (bubble) {
+      const refreshed = uniqueMediaItems([
+        ...scanAlbumBubble(bubble),
+        ...scanBubbleVideos(bubble),
+        ...scanBubblePhotos(bubble),
+        ...scanBubbleAudio(bubble),
+      ]).find((item) => item.id === media.id);
+      return refreshed || latest;
+    }
+
+    return latest;
   }
 
   async function resolveMedia(media) {
-    if (media.url) {
-      return media;
-    }
+    const hasUrl = hasDirectDownloadUrl(media.kind, media.url);
 
-    if (media.kind === "audio") {
-      return resolveAudio(media);
-    }
-
-    if (media.kind === "video") {
+    if (media.kind === "video" && (media.needsViewer || !hasUrl)) {
       return resolveViewerVideo(media);
     }
 
-    return media;
+    if (media.kind === "audio" && (media.needsAudioResolve || !hasUrl)) {
+      return resolveAudio(media);
+    }
+
+    if (hasUrl) {
+      return media;
+    }
+
+    return { ...media, url: "" };
   }
 
   async function resolveViewerVideo(media) {
     await closeViewer();
     const before = new Set(currentVideoSources());
+    const ignoredUrls = new Set([...before, media.previewUrl].filter(Boolean));
     const startedAt = Date.now();
-    media.triggerElement?.click?.();
+    activateMediaElement(media.triggerElement || media.sourceElement);
 
-    const video = await waitFor(() => {
-      const viewerVideo = document.querySelector(".media-viewer-movers .media-viewer-aspecter video")
-        || document.querySelector(".media-viewer video")
-        || newestVideoNotIn(before);
+    const source = await waitFor(() => {
+      const runtime = newestRuntimeMedia("video", startedAt, ignoredUrls);
+      if (runtime?.url) {
+        return runtime;
+      }
+
+      const viewerVideo = activeViewerVideo()
+        || activeVideoIn(media.sourceElement);
       const url = viewerVideo ? elementSource(viewerVideo) : "";
-      return url && !before.has(url) ? { element: viewerVideo, url } : undefined;
-    }, 8000);
+      return hasNetworkMediaUrl(url)
+        ? { element: viewerVideo, url, type: "video/mp4" }
+        : undefined;
+    }, 10000);
 
-    const runtime = newestRuntimeMedia("video", startedAt, before);
-    const url = video?.url || runtime?.url || "";
+    const url = source?.url || "";
     if (!url) {
       return media;
     }
@@ -820,27 +1140,32 @@
     const resolved = {
       ...media,
       url,
-      type: "video/mp4",
+      type: source.type || "video/mp4",
       fileName: inferFileName(url, "video/mp4", media.fileName || "telegram-video"),
       needsViewer: false,
+      closeViewerAfterDispatch: true,
     };
 
-    await closeViewer();
     return resolved;
   }
 
   async function resolveAudio(media) {
     const before = new Set(currentAudioSources());
+    const startedAt = Date.now();
     media.triggerElement?.click?.();
 
-    const audio = await waitFor(() => {
+    const source = await waitFor(() => {
+      const runtime = newestRuntimeMedia("audio", startedAt, before);
+      if (runtime?.url) {
+        return runtime;
+      }
+
       const found = newestAudioNotIn(before);
       const url = found ? elementSource(found) : "";
-      return url ? { element: found, url } : undefined;
+      return hasMediaUrl(url) ? { element: found, url, type: "audio/mpeg" } : undefined;
     }, 6000);
 
-    const runtime = newestRuntimeMedia("audio", Date.now() - 6000, before);
-    const url = audio?.url || runtime?.url || "";
+    const url = source?.url || "";
     if (!url) {
       return media;
     }
@@ -848,8 +1173,8 @@
     return {
       ...media,
       url,
-      type: "audio/mpeg",
-      fileName: inferFileName(url, "audio/mpeg", media.title || "telegram-audio"),
+      type: source.type || "audio/mpeg",
+      fileName: inferFileName(url, source.type || "audio/mpeg", media.title || "telegram-audio"),
       needsAudioResolve: false,
     };
   }
@@ -895,6 +1220,220 @@
     });
   }
 
+  function listenForPageDownloadProgress(mediaId) {
+    const progressEventName = `${mediaId}_video_download_progress`;
+    const statusEventName = `${mediaId}_video_download_status`;
+
+    function handleProgress(event) {
+      const percent = clampProgress(event.detail?.progress);
+      setMediaProgress(mediaId, { status: "downloading", progress: percent });
+    }
+
+    function handleStatus(event) {
+      const status = event.detail?.status || "";
+      if (status === "queued" || status === "starting") {
+        setMediaProgress(mediaId, { status: "queued", progress: mediaProgress.get(mediaId)?.progress ?? 0 });
+      } else if (status === "downloading") {
+        setMediaProgress(mediaId, { status, progress: mediaProgress.get(mediaId)?.progress ?? 0 });
+      } else if (status === "completed") {
+        setMediaProgress(mediaId, { status, progress: 100 });
+        clearMediaProgressLater(mediaId, 1800, "completed");
+      } else if (status === "failed") {
+        setMediaProgress(mediaId, { status, progress: mediaProgress.get(mediaId)?.progress ?? 0, label: "失败" });
+        markMediaForResolveRetry(mediaId);
+        clearMediaProgressLater(mediaId, 4000, "failed");
+      }
+    }
+
+    document.addEventListener(progressEventName, handleProgress);
+    document.addEventListener(statusEventName, handleStatus);
+    return () => {
+      document.removeEventListener(progressEventName, handleProgress);
+      document.removeEventListener(statusEventName, handleStatus);
+    };
+  }
+
+  function ensurePageDownloadProgressListener(mediaId) {
+    const existing = pageDownloadListeners.get(mediaId);
+    if (existing) {
+      return existing.stop;
+    }
+
+    const stopRaw = listenForPageDownloadProgress(mediaId);
+    const timeout = window.setTimeout(() => {
+      const current = mediaProgress.get(mediaId);
+      if (current && ["starting", "downloading"].includes(current.status)) {
+        stopPageDownloadProgressListener(mediaId);
+      }
+    }, videoDownloadFinishTimeoutMs);
+    const stop = () => {
+      window.clearTimeout(timeout);
+      stopRaw();
+      pageDownloadListeners.delete(mediaId);
+    };
+    pageDownloadListeners.set(mediaId, { stop });
+    return stop;
+  }
+
+  function stopPageDownloadProgressListener(mediaId) {
+    pageDownloadListeners.get(mediaId)?.stop?.();
+  }
+
+  function isMediaDownloadActive(mediaId) {
+    const status = mediaProgress.get(mediaId)?.status;
+    return status === "queued" || status === "starting" || status === "downloading";
+  }
+
+  function markMediaForResolveRetry(mediaId) {
+    const media = mediaById.get(mediaId);
+    if (!media) {
+      return;
+    }
+
+    rememberMedia({
+      ...media,
+      url: "",
+      needsViewer: media.kind === "video" ? true : media.needsViewer,
+      needsAudioResolve: media.kind === "audio" ? true : media.needsAudioResolve,
+    });
+  }
+
+  function setMediaProgress(mediaId, patch) {
+    if (!mediaId) {
+      return;
+    }
+
+    const previous = mediaProgress.get(mediaId);
+    const next = {
+      status: "queued",
+      progress: 0,
+      ...previous,
+      ...patch,
+    };
+    if (!Object.prototype.hasOwnProperty.call(patch, "label") && patch.status !== "failed") {
+      delete next.label;
+    }
+    if (patch.status === "completed" || patch.status === "failed") {
+      stopPageDownloadProgressListener(mediaId);
+    }
+    mediaProgress.set(mediaId, next);
+    renderMediaProgress(mediaId);
+    renderBatchProgress();
+  }
+
+  function clearMediaProgressLater(mediaId, timeoutMs, status) {
+    window.setTimeout(() => {
+      if (!status || mediaProgress.get(mediaId)?.status === status) {
+        mediaProgress.delete(mediaId);
+        renderMediaProgress(mediaId);
+        renderBatchProgress();
+      }
+    }, timeoutMs);
+  }
+
+  function renderMediaProgress(mediaId) {
+    const state = mediaProgress.get(mediaId);
+    document.querySelectorAll(`.jarvis-tg-progress[data-media-id="${cssEscape(mediaId)}"]`).forEach((node) => {
+      const label = node.querySelector("span");
+      const fill = node.querySelector(".jarvis-tg-progress__fill");
+      const progress = clampProgress(state?.progress ?? 0);
+      node.classList.toggle("is-active", Boolean(state));
+      node.classList.toggle("is-failed", state?.status === "failed");
+      node.style.setProperty("--jarvis-tg-progress", `${progress}%`);
+      if (label) {
+        label.textContent = state?.label || progressLabel(state?.status, progress);
+      }
+      if (fill) {
+        fill.style.width = `${progress}%`;
+      }
+    });
+  }
+
+  function renderBatchProgress() {
+    document.querySelectorAll(".jarvis-tg-album-actions").forEach((actions) => {
+      const state = actions.jarvisTgBatchState;
+      const download = actions.querySelector(".jarvis-tg-album-download");
+      if (!state || !download) {
+        return;
+      }
+
+      const ids = state.mediaIds || [];
+      const active = ids
+        .map((id) => ({ id, state: mediaProgress.get(id) }))
+        .filter((item) => ["queued", "starting", "downloading"].includes(item.state?.status));
+      if (!active.length) {
+        const boxes = Array.from(state.bubble?.querySelectorAll?.(`.album-item > input.${CHECK_CLASS}`) || [])
+          .filter((checkbox) => state.mediaIdSet?.has(checkbox.dataset.mediaId));
+        const selectedCount = boxes.filter((checkbox) => checkbox.checked).length;
+        if (boxes.length) {
+          download.textContent = `下载已选 (${selectedCount}/${boxes.length})`;
+          download.disabled = selectedCount === 0;
+        } else {
+          download.textContent = `下载 (${ids.length})`;
+          download.disabled = ids.length === 0;
+        }
+        return;
+      }
+
+      const done = ids.filter((id) => mediaProgress.get(id)?.status === "completed").length;
+      const current = active[0].state;
+      const percent = clampProgress(current?.progress ?? 0);
+      download.disabled = true;
+      download.textContent = `下载中 ${Math.min(done + 1, ids.length)}/${ids.length} · ${Math.round(percent)}%`;
+    });
+  }
+
+  function progressLabel(status, progress) {
+    if (status === "queued" || status === "starting") {
+      return "排队";
+    }
+    if (status === "completed") {
+      return "完成";
+    }
+    if (status === "failed") {
+      return "失败";
+    }
+    return `${Math.round(progress)}%`;
+  }
+
+  function clampProgress(value) {
+    const numberValue = Number(value);
+    if (!Number.isFinite(numberValue)) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, numberValue));
+  }
+
+  function cssEscape(value) {
+    if (window.CSS?.escape) {
+      return window.CSS.escape(value);
+    }
+    return String(value).replace(/["\\#.:,[\]>+~*^$|=\s]/g, "\\$&");
+  }
+
+  function waitForPageDownloadStatus(mediaId, statuses, timeoutMs) {
+    return new Promise((resolve) => {
+      const eventName = `${mediaId}_video_download_status`;
+      const timeout = window.setTimeout(() => {
+        document.removeEventListener(eventName, handleStatus);
+        resolve(undefined);
+      }, timeoutMs);
+
+      function handleStatus(event) {
+        const detail = event.detail || {};
+        if (!statuses.has(detail.status)) {
+          return;
+        }
+
+        window.clearTimeout(timeout);
+        document.removeEventListener(eventName, handleStatus);
+        resolve(detail);
+      }
+
+      document.addEventListener(eventName, handleStatus);
+    });
+  }
+
   function currentVideoSources() {
     return Array.from(document.querySelectorAll("video")).map(elementSource).filter(Boolean);
   }
@@ -906,14 +1445,41 @@
   function newestVideoNotIn(before) {
     return Array.from(document.querySelectorAll("video")).reverse().find((video) => {
       const url = elementSource(video);
-      return url && !before.has(url);
+      return hasNetworkMediaUrl(url) && !before.has(url);
     });
+  }
+
+  function activeViewerVideo() {
+    const candidates = Array.from(document.querySelectorAll(
+      ".media-viewer-movers .media-viewer-aspecter video, .media-viewer video",
+    ));
+    return candidates.find((video) => {
+      const rect = video.getBoundingClientRect();
+      return rect.width > 1
+        && rect.height > 1
+        && rect.left < window.innerWidth
+        && rect.right > 0
+        && rect.top < window.innerHeight
+        && rect.bottom > 0;
+    }) || candidates.at(-1);
+  }
+
+  function activeVideoIn(root) {
+    if (!root) {
+      return undefined;
+    }
+
+    const candidates = Array.from(root.querySelectorAll?.("video") || []);
+    return candidates.find((video) => {
+      const rect = video.getBoundingClientRect();
+      return rect.width > 1 && rect.height > 1;
+    }) || candidates.at(-1);
   }
 
   function newestAudioNotIn(before) {
     return Array.from(document.querySelectorAll("audio")).reverse().find((audio) => {
       const url = elementSource(audio);
-      return url && !before.has(url);
+      return hasMediaUrl(url) && !before.has(url);
     });
   }
 
@@ -921,6 +1487,9 @@
     const prefix = `${kind}/`;
     return recentRuntimeMedia.find((item) => {
       if (item.createdAt < minCreatedAt || ignoredUrls.has(item.url)) {
+        return false;
+      }
+      if ((kind === "video" || kind === "audio") && !hasNetworkMediaUrl(item.url)) {
         return false;
       }
       return item.type.startsWith(prefix) || kindFromType(item.type, item.url) === kind;
@@ -948,21 +1517,21 @@
         fileName: media.fileName || "",
         type: media.kind || kindFromType(media.type, media.url),
         contentType: media.type || "",
-        url: media.url || "",
+        url: hasDirectDownloadUrl(media.kind, media.url) ? media.url : "",
         page: media.page || location.href,
         context: media.context || "",
-        downloadable: Boolean(media.url || media.needsViewer || media.needsAudioResolve),
+        downloadable: Boolean(hasDirectDownloadUrl(media.kind, media.url) || media.needsViewer || media.needsAudioResolve),
       }));
   }
 
   function rememberMedia(input) {
-    const existingId = input.url ? mediaByUrl.get(input.url) : "";
+    const existingId = hasDirectDownloadUrl(input.kind, input.url) && !input.needsViewer ? mediaByUrl.get(input.url) : "";
     const keyedId = input.key ? mediaByKey.get(input.key) : "";
     const id = input.id || existingId || keyedId || `jarvis-tg-${++sequence}`;
     const existing = mediaById.get(id) || {};
     const media = { ...existing, ...input, id };
 
-    if (media.url) {
+    if (hasDirectDownloadUrl(media.kind, media.url) && !media.needsViewer) {
       mediaByUrl.set(media.url, id);
     }
     if (media.key) {
@@ -993,6 +1562,79 @@
     }
 
     return "";
+  }
+
+  function activateMediaElement(element) {
+    if (!element) {
+      return;
+    }
+
+    const target = clickableMediaElement(element);
+    target.click?.();
+  }
+
+  function clickableMediaElement(element) {
+    return activationTargetFor(element) || element;
+  }
+
+  function activationTargetFor(element) {
+    if (!element) {
+      return undefined;
+    }
+
+    if (element.matches?.(".album-item-media, .media-container, .media-video")) {
+      return element;
+    }
+
+    return element.querySelector?.(".album-item-media")
+      || element.querySelector?.(".media-container")
+      || element.querySelector?.(".media-video")
+      || element.querySelector?.("video")
+      || element.querySelector?.(".media-photo")
+      || element.querySelector?.("img");
+  }
+
+  function mediaDebugInfo(media) {
+    return {
+      trigger: describeElement(media.triggerElement),
+      source: describeElement(media.sourceElement),
+      previewUrl: media.previewUrl || "",
+      videoCount: document.querySelectorAll("video").length,
+      viewerVideoCount: document.querySelectorAll(".media-viewer-movers .media-viewer-aspecter video, .media-viewer video").length,
+      recentRuntimeMedia: recentRuntimeMedia.slice(0, 5).map((item) => ({
+        type: item.type,
+        source: item.source,
+        ageMs: Date.now() - item.createdAt,
+        url: String(item.url || "").slice(0, 120),
+      })),
+    };
+  }
+
+  function getAutomationDebugInfo() {
+    return {
+      url: location.href,
+      title: document.title,
+      mediaCount: mediaById.size,
+      rows: getPopupRows().length,
+      videoCount: document.querySelectorAll("video").length,
+      audioCount: document.querySelectorAll("audio").length,
+      viewerVideoCount: document.querySelectorAll(".media-viewer-movers .media-viewer-aspecter video, .media-viewer video").length,
+      recentRuntimeMedia: recentRuntimeMedia.slice(0, 10).map((item) => ({
+        type: item.type,
+        source: item.source,
+        ageMs: Date.now() - item.createdAt,
+        url: String(item.url || "").slice(0, 180),
+      })),
+    };
+  }
+
+  function describeElement(element) {
+    if (!element) {
+      return "";
+    }
+
+    const classes = String(element.className || "").replace(/\s+/g, ".").slice(0, 120);
+    return `${element.tagName?.toLowerCase?.() || "node"}${classes ? `.${classes}` : ""}`;
   }
 
   function inferFileName(url, type, fallbackBase) {
@@ -1079,6 +1721,10 @@
   function isUsefulRuntimeMedia(detail) {
     const type = String(detail.type || "").toLowerCase();
     const url = String(detail.url || "").toLowerCase();
+    if (!hasMediaUrl(url)) {
+      return false;
+    }
+
     return type.startsWith("video/")
       || type.startsWith("audio/")
       || url.includes("stream/")
@@ -1089,6 +1735,31 @@
   function hasVideoMarker(container) {
     return Boolean(container?.matches?.(".media-video, .video-time, video")
       || container?.querySelector?.(".media-video, .video-time, video"));
+  }
+
+  function hasMediaUrl(url) {
+    return Boolean(url);
+  }
+
+  function hasNetworkMediaUrl(url) {
+    if (!url || String(url).startsWith("blob:")) {
+      return false;
+    }
+
+    try {
+      const parsed = new URL(url, location.href);
+      return parsed.protocol === "http:" || parsed.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  function hasDirectDownloadUrl(kind, url) {
+    if (kind === "video" || kind === "audio") {
+      return hasNetworkMediaUrl(url);
+    }
+
+    return hasMediaUrl(url);
   }
 
 })();

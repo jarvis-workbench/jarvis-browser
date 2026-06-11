@@ -108,11 +108,20 @@ protocol.registerSchemesAsPrivileged([
 const registeredSessions = new WeakSet<Session>();
 
 export function registerInternalProtocol() {
+  if (protocol.isProtocolHandled(internalPageProtocol)) {
+    return;
+  }
+
   protocol.handle(internalPageProtocol, handleInternalRequest);
 }
 
 export function registerInternalProtocolForSession(targetSession: Session) {
   if (registeredSessions.has(targetSession)) {
+    return;
+  }
+
+  if (targetSession.protocol.isProtocolHandled(internalPageProtocol)) {
+    registeredSessions.add(targetSession);
     return;
   }
 
@@ -270,19 +279,38 @@ function getRendererIndexPath() {
 }
 
 function readErrorPageHtml() {
-  if (!app.isPackaged) {
-    return readFile(join(app.getAppPath(), "src", "internal-pages", "error.html"), "utf8");
-  }
-
-  return readFile(join(process.resourcesPath, "internal-pages", "error.html"), "utf8");
+  return readInternalPageHtml("error");
 }
 
 function readOverlayPageHtml() {
-  if (!app.isPackaged) {
-    return readFile(join(app.getAppPath(), "src", "internal-pages", "overlay.html"), "utf8");
+  return readInternalPageHtml("overlay");
+}
+
+async function readInternalPageHtml(pageName: "error" | "overlay") {
+  const fileName = `${pageName}.html`;
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, "internal-pages", fileName)]
+    : [
+      join(app.getAppPath(), "src", "internal-pages", fileName),
+      join(__dirname, "../../src/internal-pages", fileName),
+    ];
+
+  for (const candidate of candidates) {
+    const html = await readFile(candidate, "utf8").catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    });
+
+    if (html !== undefined) {
+      return html;
+    }
   }
 
-  return readFile(join(process.resourcesPath, "internal-pages", "overlay.html"), "utf8");
+  const missingPaths = candidates.join(", ");
+  console.error(`[internal-protocol] ${fileName} not found. Tried: ${missingPaths}`);
+  return fallbackInternalPageHtml(pageName, missingPaths);
 }
 
 function htmlResponse(html: string) {
@@ -292,6 +320,46 @@ function htmlResponse(html: string) {
       "cache-control": "no-store",
     },
   });
+}
+
+function fallbackInternalPageHtml(pageName: "error" | "overlay", missingPaths: string) {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <title>Jarvis Browser</title>
+    <style>
+      body { margin: 0; padding: 16px; color: #202124; background: #fff; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      strong { display: block; margin-bottom: 8px; font-size: 14px; }
+      code { display: block; white-space: pre-wrap; word-break: break-word; color: #5f6368; }
+    </style>
+  </head>
+  <body>
+    <strong>Internal page failed to load: ${escapeHtml(pageName)}</strong>
+    <code>${escapeHtml(missingPaths)}</code>
+  </body>
+</html>`;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    switch (character) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "\"":
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }
 
 function contentTypeFromPath(filePath: string) {

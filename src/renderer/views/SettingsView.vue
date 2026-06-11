@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Code, Download, FolderOpen, History, Plug, VacuumCleaner } from '@icon-park/vue-next';
-import { ElButton, ElInput, ElMessage, ElProgress, ElSwitch } from 'element-plus';
+import { Code, Copy, Download, FolderOpen, History, Plug, Refresh, SettingWeb, VacuumCleaner } from '@icon-park/vue-next';
+import { ElButton, ElInput, ElInputNumber, ElMessage, ElProgress, ElSwitch } from 'element-plus';
 import { computed, onMounted, ref } from 'vue';
 import type { BrowserInternalPageId } from '../../shared/types';
 import { formatError } from '../../shared/utils';
@@ -9,11 +9,15 @@ import { useBrowserStore } from '../stores/browser';
 const browser = useBrowserStore();
 
 const settings = computed(() => browser.downloadSettings);
+const automationBridge = computed(() => browser.automationBridgeStatus);
 const updateStatus = computed(() => browser.appUpdateStatus);
 const updateProgress = computed(() => Math.round(updateStatus.value.progress?.percent || 0));
 const isCheckingForUpdates = ref(false);
 const isDownloadingUpdate = ref(false);
 const isInstallingUpdate = ref(false);
+const isUpdatingAutomationBridge = ref(false);
+const isRegeneratingAutomationToken = ref(false);
+const pendingAutomationPort = ref(17361);
 const canCheckForUpdates = computed(() => ![
   'unsupported',
   'checking',
@@ -28,6 +32,15 @@ const checkUpdateLabel = computed(() => (
       : '重新检查'
 ));
 const canDownloadUpdate = computed(() => updateStatus.value.phase === 'available');
+const automationBridgeStatusText = computed(() => {
+  if (!automationBridge.value?.enabled) {
+    return '未开启';
+  }
+  if (automationBridge.value.running) {
+    return '运行中';
+  }
+  return automationBridge.value.lastError || '启动失败';
+});
 const navItems: Array<{ pageId: BrowserInternalPageId; label: string; icon: typeof Download }> = [
   { pageId: 'settings', label: '下载内容', icon: Download },
   { pageId: 'downloads', label: '下载记录', icon: Download },
@@ -42,6 +55,7 @@ onMounted(async () => {
     browser.loadSettings(),
     browser.loadUpdateStatus(),
   ]);
+  pendingAutomationPort.value = automationBridge.value?.port || 17361;
 });
 
 async function selectDownloadPath() {
@@ -65,6 +79,60 @@ async function updateAskBeforeDownload(value: string | number | boolean) {
     await browser.updateDownloadSettings({
       askWhereToSaveBeforeDownloading: Boolean(value),
     });
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+async function updateAutomationEnabled(value: string | number | boolean) {
+  try {
+    isUpdatingAutomationBridge.value = true;
+    await browser.updateAutomationBridge({
+      enabled: Boolean(value),
+      port: pendingAutomationPort.value,
+    });
+    pendingAutomationPort.value = automationBridge.value?.port || pendingAutomationPort.value;
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  } finally {
+    isUpdatingAutomationBridge.value = false;
+  }
+}
+
+async function updateAutomationPort() {
+  try {
+    isUpdatingAutomationBridge.value = true;
+    await browser.updateAutomationBridge({
+      port: pendingAutomationPort.value,
+      enabled: automationBridge.value?.enabled || false,
+    });
+    pendingAutomationPort.value = automationBridge.value?.port || pendingAutomationPort.value;
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  } finally {
+    isUpdatingAutomationBridge.value = false;
+  }
+}
+
+async function regenerateAutomationToken() {
+  try {
+    isRegeneratingAutomationToken.value = true;
+    await browser.regenerateAutomationBridgeToken();
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  } finally {
+    isRegeneratingAutomationToken.value = false;
+  }
+}
+
+async function copyAutomationText(value?: string) {
+  if (!value) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    ElMessage.success('已复制');
   } catch (error) {
     ElMessage.error(formatError(error));
   }
@@ -189,6 +257,71 @@ function unsupportedUpdateText() {
           />
         </div>
 
+        <section class="settings-section" aria-label="本机自动化桥">
+          <h2>本机自动化桥</h2>
+
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <strong>启用</strong>
+              <span>{{ automationBridgeStatusText }}</span>
+            </div>
+            <ElSwitch
+              :model-value="automationBridge?.enabled || false"
+              :disabled="isUpdatingAutomationBridge"
+              @update:model-value="updateAutomationEnabled"
+            />
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <strong>端口</strong>
+              <span>{{ automationBridge?.origin || `http://127.0.0.1:${pendingAutomationPort}` }}</span>
+            </div>
+            <div class="settings-row__control settings-row__control--port">
+              <ElInputNumber
+                v-model="pendingAutomationPort"
+                :min="1024"
+                :max="65535"
+                :step="1"
+                controls-position="right"
+                :disabled="isUpdatingAutomationBridge"
+              />
+              <ElButton :loading="isUpdatingAutomationBridge" @click="updateAutomationPort">
+                <SettingWeb theme="outline" size="16" />
+                应用
+              </ElButton>
+            </div>
+          </div>
+
+          <div class="settings-row settings-row--top">
+            <div class="settings-row__text">
+              <strong>地址</strong>
+              <span class="settings-row__mono">{{ automationBridge?.origin || '' }}</span>
+            </div>
+            <ElButton :disabled="!automationBridge?.origin" @click="copyAutomationText(automationBridge?.origin)">
+              <Copy theme="outline" size="16" />
+              复制
+            </ElButton>
+          </div>
+
+          <div class="settings-row settings-row--top">
+            <div class="settings-row__text">
+              <strong>Token</strong>
+              <span class="settings-row__mono">{{ automationBridge?.token || '' }}</span>
+            </div>
+            <div class="settings-row__control settings-row__control--actions">
+              <ElButton :disabled="!automationBridge?.token" @click="copyAutomationText(automationBridge?.token)">
+                <Copy theme="outline" size="16" />
+                复制
+              </ElButton>
+              <ElButton :loading="isRegeneratingAutomationToken" @click="regenerateAutomationToken">
+                <Refresh theme="outline" size="16" />
+                重置
+              </ElButton>
+            </div>
+          </div>
+        </section>
+
         <section class="settings-section" aria-label="更新">
           <h2>更新</h2>
 
@@ -310,6 +443,31 @@ function unsupportedUpdateText() {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.settings-row__control--port {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-row__control--port :deep(.el-input-number) {
+  width: 132px;
+}
+
+.settings-row__control--port :deep(.el-button),
+.settings-row--top > :deep(.el-button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-row__mono {
+  max-width: min(520px, 48vw);
+  overflow-wrap: anywhere;
+  color: #3c4043;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .update-panel {

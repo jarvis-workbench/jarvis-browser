@@ -1,3 +1,4 @@
+import { AutomationBridge } from "./automation-bridge";
 import { BrowserHost } from "./browser-host";
 import { HistoryManager } from "./history-manager";
 import { IpcRouter } from "./ipc-router";
@@ -11,6 +12,7 @@ export const registerIpc = (
   historyManager: HistoryManager,
   storageManager: StorageManager,
   updateManager: UpdateManager,
+  automationBridge: AutomationBridge,
 ) => {
   const ipcRouter = new IpcRouter(
     store,
@@ -18,6 +20,7 @@ export const registerIpc = (
     historyManager,
     storageManager,
     updateManager,
+    automationBridge,
   );
   ipcRouter.register();
 };

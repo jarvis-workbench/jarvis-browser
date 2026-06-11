@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
 import type { BrowserRect } from "../shared/types";
+import { registerInternalProtocolForSession } from "./internal-protocol";
 
 type OpenToolOverlayInput = {
   key: string;
@@ -171,6 +172,7 @@ export class BrowserOverlayHost {
 
     this.popupWindow = popupWindow;
     this.activePopup = this.createActivePopup(input.key, input.anchor, input.width, input.height);
+    registerInternalProtocolForSession(popupWindow.webContents.session);
 
     popupWindow.setMenuBarVisibility(false);
     popupWindow.once("ready-to-show", () => {

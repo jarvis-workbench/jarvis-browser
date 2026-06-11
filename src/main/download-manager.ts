@@ -13,15 +13,28 @@ type PendingDownloadWrite = {
   fallbackStartTime: number;
 };
 
+type ManagedDownload = {
+  id: string;
+  item: DownloadItem;
+  plannedSavePath: string;
+  startedAt: number;
+  queueState: "queued" | "active" | "done";
+};
+
+const maxConcurrentDownloads = 2;
+
 export class DownloadManager {
   private readonly boundSessions = new WeakSet<Electron.Session>();
+  private readonly managedDownloads = new Map<string, ManagedDownload>();
   private readonly activeItems = new Map<string, DownloadItem>();
+  private readonly queuedIds: string[] = [];
   private readonly pendingWrites = new Map<string, PendingDownloadWrite>();
   private readonly writeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly store: MetadataStore,
+    private readonly emitToInternalPages?: (download: DownloadState) => void,
   ) {}
 
   bindDefault() {
@@ -29,21 +42,36 @@ export class DownloadManager {
   }
 
   pause(downloadId: string) {
-    const item = this.requireActiveItem(downloadId);
+    const item = this.requireControllableItem(downloadId);
     item.pause();
-    return this.writeItem(downloadId, item, item.getState());
+    return this.writeManagedItem(downloadId, "progressing");
   }
 
   resume(downloadId: string) {
-    const item = this.requireActiveItem(downloadId);
-    item.resume();
-    return this.writeItem(downloadId, item, item.getState());
+    const managed = this.requireManagedDownload(downloadId);
+    if (managed.queueState === "queued") {
+      this.removeQueuedId(downloadId);
+      this.startManagedDownload(managed);
+      return this.writeManagedItem(downloadId, "progressing");
+    }
+
+    managed.item.resume();
+    return this.writeManagedItem(downloadId, "progressing");
   }
 
   cancel(downloadId: string) {
-    const item = this.requireActiveItem(downloadId);
-    item.cancel();
-    return this.writeItem(downloadId, item, "cancelled");
+    const managed = this.requireManagedDownload(downloadId);
+    if (managed.queueState === "queued") {
+      managed.queueState = "done";
+      this.removeQueuedId(downloadId);
+      this.managedDownloads.delete(downloadId);
+      managed.item.cancel();
+      void this.drainQueue();
+      return this.writeDownloadState(this.createDownloadState(downloadId, managed.item, "cancelled", undefined, managed.plannedSavePath, managed.startedAt));
+    }
+
+    managed.item.cancel();
+    return this.writeManagedItem(downloadId, "cancelled");
   }
 
   async open(downloadId: string) {
@@ -98,18 +126,41 @@ export class DownloadManager {
         }
       }
 
-      this.activeItems.set(id, item);
-      this.emitDownloadUpdate(
-        this.createDownloadState(id, item, "progressing", undefined, plannedSavePath, startedAt),
-      );
-      void this.writeItem(id, item, "progressing", undefined, plannedSavePath, startedAt);
+      const managed: ManagedDownload = {
+        id,
+        item,
+        plannedSavePath,
+        startedAt,
+        queueState: "queued",
+      };
+      this.managedDownloads.set(id, managed);
+
+      const canQueue = !settings.askWhereToSaveBeforeDownloading && isQueueableDownloadUrl(item.getURL());
+      const shouldQueue = canQueue && this.activeItems.size >= maxConcurrentDownloads;
+      if (shouldQueue) {
+        item.pause();
+        this.queuedIds.push(id);
+        void this.writeManagedItem(id, "queued");
+      } else {
+        this.startManagedDownload(managed);
+        void this.writeManagedItem(id, "progressing");
+      }
+
       item.on("updated", (_updatedEvent, state) => {
-        this.scheduleItemWrite(id, item, state, undefined, "", startedAt);
+        if (managed.queueState === "queued") {
+          return;
+        }
+
+        this.scheduleItemWrite(id, item, state, undefined, plannedSavePath, startedAt);
       });
       item.once("done", (_doneEvent, state) => {
+        managed.queueState = "done";
         this.activeItems.delete(id);
+        this.managedDownloads.delete(id);
+        this.removeQueuedId(id);
         this.clearScheduledWrite(id);
-        void this.writeItem(id, item, state, undefined, "", startedAt);
+        void this.writeItem(id, item, state, undefined, plannedSavePath, startedAt);
+        void this.drainQueue();
       });
     });
   }
@@ -162,13 +213,22 @@ export class DownloadManager {
     this.pendingWrites.delete(id);
   }
 
-  private requireActiveItem(downloadId: string) {
-    const item = this.activeItems.get(downloadId);
-    if (!item) {
+  private requireControllableItem(downloadId: string) {
+    const managed = this.managedDownloads.get(downloadId);
+    if (!managed || managed.queueState === "done") {
       throw new Error("下载任务不可控制");
     }
 
-    return item;
+    return managed.item;
+  }
+
+  private requireManagedDownload(downloadId: string) {
+    const managed = this.managedDownloads.get(downloadId);
+    if (!managed || managed.queueState === "done") {
+      throw new Error("下载任务不可控制");
+    }
+
+    return managed;
   }
 
   private requireStoredDownload(downloadId: string) {
@@ -201,6 +261,15 @@ export class DownloadManager {
     fallbackStartTime = Date.now(),
   ) {
     const download = this.createDownloadState(id, item, state, errorText, fallbackSavePath, fallbackStartTime);
+    return this.writeDownloadState(download);
+  }
+
+  private writeManagedItem(id: string, state: DownloadState["state"], errorText?: string) {
+    const managed = this.requireManagedDownload(id);
+    return this.writeItem(id, managed.item, state, errorText, managed.plannedSavePath, managed.startedAt);
+  }
+
+  private async writeDownloadState(download: DownloadState) {
     const stored = await this.store.upsertDownload(download);
     this.emitDownloadUpdate(stored);
 
@@ -226,7 +295,7 @@ export class DownloadManager {
       totalBytes: item.getTotalBytes(),
       state,
       startTime: toMilliseconds(item.getStartTime()) || fallbackStartTime,
-      endTime: state === "progressing" ? undefined : toMilliseconds(item.getEndTime()) || Date.now(),
+      endTime: state === "progressing" || state === "queued" ? undefined : toMilliseconds(item.getEndTime()) || Date.now(),
       paused: item.isPaused(),
       canResume: item.canResume(),
       speedBytesPerSecond: item.getCurrentBytesPerSecond(),
@@ -237,6 +306,39 @@ export class DownloadManager {
   private emitDownloadUpdate(download: DownloadState) {
     if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
       this.window.webContents.send("download:updated", download);
+    }
+    this.emitToInternalPages?.(download);
+  }
+
+  private startManagedDownload(managed: ManagedDownload) {
+    managed.queueState = "active";
+    this.activeItems.set(managed.id, managed.item);
+    if (managed.item.isPaused()) {
+      managed.item.resume();
+    }
+  }
+
+  private drainQueue() {
+    while (this.activeItems.size < maxConcurrentDownloads) {
+      const id = this.queuedIds.shift();
+      if (!id) {
+        return;
+      }
+
+      const managed = this.managedDownloads.get(id);
+      if (!managed || managed.queueState !== "queued") {
+        continue;
+      }
+
+      this.startManagedDownload(managed);
+      void this.writeManagedItem(id, "progressing");
+    }
+  }
+
+  private removeQueuedId(downloadId: string) {
+    const index = this.queuedIds.indexOf(downloadId);
+    if (index >= 0) {
+      this.queuedIds.splice(index, 1);
     }
   }
 }
@@ -257,8 +359,15 @@ function createUniqueDownloadPath(downloadPath: string, filename: string) {
   return candidate;
 }
 
+function isQueueableDownloadUrl(url: string) {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function toMilliseconds(seconds: number) {
   return seconds > 0 ? Math.round(seconds * 1000) : 0;
 }
-
-

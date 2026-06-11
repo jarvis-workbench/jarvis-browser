@@ -217,7 +217,7 @@ export interface DownloadState {
   mimeType: string;
   receivedBytes: number;
   totalBytes: number;
-  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  state: 'queued' | 'progressing' | 'completed' | 'cancelled' | 'interrupted';
   startTime: number;
   endTime?: number;
   paused: boolean;
@@ -229,6 +229,100 @@ export interface DownloadState {
 export interface DownloadSettings {
   downloadPath: string;
   askWhereToSaveBeforeDownloading: boolean;
+}
+
+export interface AutomationBridgeSettings {
+  enabled: boolean;
+  port: number;
+  token: string;
+}
+
+export interface AutomationBridgeStatus extends AutomationBridgeSettings {
+  running: boolean;
+  origin: string;
+  lastError?: string;
+}
+
+export interface AutomationTabInfo extends BrowserTab {
+  currentUrl: string;
+  displayUrl?: string;
+  isLoading: boolean;
+  webContentsId?: number;
+}
+
+export interface AutomationEvaluateInput {
+  tabId?: string;
+  code: string;
+  args?: unknown;
+  timeoutMs?: number;
+}
+
+export interface AutomationEvaluateResult {
+  ok: boolean;
+  tab: AutomationTabInfo;
+  value?: unknown;
+  error?: {
+    name?: string;
+    message: string;
+    stack?: string;
+  };
+}
+
+export interface AutomationDomElement {
+  tagName: string;
+  id: string;
+  className: string;
+  text: string;
+  selector: string;
+  attributes: Record<string, string>;
+  rect: BrowserRect;
+  visible: boolean;
+  html?: string;
+  children?: AutomationDomElement[];
+}
+
+export interface AutomationDomQueryInput {
+  tabId?: string;
+  selector: string;
+  limit?: number;
+  includeHtml?: boolean;
+  textMaxLength?: number;
+}
+
+export interface AutomationDomQueryResult {
+  tab: AutomationTabInfo;
+  pageUrl: string;
+  title: string;
+  elements: AutomationDomElement[];
+}
+
+export interface AutomationDomSnapshotInput {
+  tabId?: string;
+  selector?: string;
+  maxDepth?: number;
+  maxChildren?: number;
+  textMaxLength?: number;
+}
+
+export interface AutomationDomSnapshotResult {
+  tab: AutomationTabInfo;
+  pageUrl: string;
+  title: string;
+  roots: AutomationDomElement[];
+}
+
+export interface AutomationTelegramInput {
+  tabId?: string;
+  action?: "scan" | "debug" | "download";
+  ids?: string[];
+  timeoutMs?: number;
+}
+
+export interface AutomationTelegramResult {
+  tab: AutomationTabInfo;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
 }
 
 export type AppUpdatePhase =
@@ -551,6 +645,9 @@ export interface AppApi {
     get(): Promise<DownloadSettings>;
     update(input: Partial<DownloadSettings>): Promise<DownloadSettings>;
     selectDownloadPath(): Promise<string | undefined>;
+    getAutomationBridge(): Promise<AutomationBridgeStatus>;
+    updateAutomationBridge(input: Partial<Pick<AutomationBridgeSettings, "enabled" | "port">>): Promise<AutomationBridgeStatus>;
+    regenerateAutomationBridgeToken(): Promise<AutomationBridgeStatus>;
   };
   updates: {
     getStatus(): Promise<AppUpdateStatus>;

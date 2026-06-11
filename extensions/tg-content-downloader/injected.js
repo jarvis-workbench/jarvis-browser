@@ -5,26 +5,67 @@
   window.__jarvisTgDownloaderInstalled = true;
 
   const rangePattern = /^bytes (\d+)-(\d+)\/(\d+)$/;
+  const downloadFetch = typeof window.fetch === "function" ? window.fetch.bind(window) : null;
+  const rangeConcurrency = 1;
+  const downloadConcurrency = 2;
+  const fetchRetryCount = 2;
+  const downloadQueue = [];
+  const objectUrls = new Set();
+  let activeDownloadCount = 0;
 
   document.addEventListener("video_download", (event) => {
     const detail = event.detail;
     if (detail?.type === "single") {
-      downloadMedia(detail.video_src);
+      enqueueDownload(detail.video_src);
       return;
     }
 
     if (detail?.type === "batch" && Array.isArray(detail.video_src)) {
-      detail.video_src.forEach((media) => downloadMedia(media));
+      detail.video_src.forEach((media) => enqueueDownload(media));
     }
   });
 
   document.addEventListener("jarvis_tg_download", (event) => {
-    downloadMedia(event.detail);
+    enqueueDownload(event.detail);
   });
 
   hookFetch();
   hookXhr();
   hookObjectUrls();
+  window.addEventListener("pagehide", revokeObjectUrls);
+
+  function enqueueDownload(media) {
+    const url = media?.video_url || media?.url;
+    if (!url) {
+      return;
+    }
+
+    const progressKey = media.video_id || media.id || "";
+    const page = media.page || location.href;
+    const downloadId = media.download_id || progressKey;
+
+    if (canUseNativeDownload(url)) {
+      void downloadMedia(media);
+      return;
+    }
+
+    emitStatus(progressKey, "queued", page, downloadId);
+    downloadQueue.push(media);
+    void drainDownloadQueue();
+  }
+
+  async function drainDownloadQueue() {
+    while (activeDownloadCount < downloadConcurrency && downloadQueue.length) {
+      const media = downloadQueue.shift();
+      activeDownloadCount += 1;
+      void downloadMedia(media).finally(() => {
+        activeDownloadCount = Math.max(0, activeDownloadCount - 1);
+        window.setTimeout(() => {
+          void drainDownloadQueue();
+        }, 250);
+      });
+    }
+  }
 
   async function downloadMedia(media) {
     const url = media?.video_url || media?.url;
@@ -39,23 +80,33 @@
     const downloadId = media.download_id || progressKey;
 
     try {
+      emitStatus(progressKey, "downloading", page, downloadId);
+      if (canUseNativeDownload(url)) {
+        saveUrl(url, fileName);
+        emitProgress(progressKey, "100.00", page, downloadId);
+        emitStatus(progressKey, "completed", page, downloadId);
+        return;
+      }
+
       const blob = await fetchMediaBlob(url, type, (progress) => {
         emitProgress(progressKey, progress, page, downloadId);
       });
       saveBlob(blob, fileName);
       emitProgress(progressKey, "100.00", page, downloadId);
+      emitStatus(progressKey, "completed", page, downloadId);
     } catch (error) {
+      emitStatus(progressKey, "failed", page, downloadId, error);
       console.warn("[Jarvis TG Downloader] download failed", error);
     }
   }
 
   async function fetchMediaBlob(url, fallbackType, onProgress) {
-    if (url.startsWith("blob:")) {
-      const response = await fetch(url);
-      return response.blob();
+    if (!downloadFetch) {
+      throw new Error("Fetch is unavailable");
     }
 
-    const probe = await fetch(url, { headers: { Range: "bytes=0-" } });
+    const probe = await fetchWithRetry(url, { headers: { Range: "bytes=0-" } });
+
     if (!probe.ok) {
       throw new Error(`HTTP error ${probe.status}`);
     }
@@ -87,16 +138,43 @@
       }));
     }
 
-    const rest = await runPool(tasks, 6);
+    const rest = await runPool(tasks, rangeConcurrency);
     return new Blob([...buffers, ...rest], { type: contentType });
   }
 
   async function fetchRange(url, start, end) {
-    const response = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
-    if (![200, 206].includes(response.status)) {
+    const response = await fetchWithRetry(url, { headers: { Range: `bytes=${start}-${end}` } });
+    if (response.status !== 206) {
       throw new Error(`Range request failed: ${response.status}`);
     }
     return response.arrayBuffer();
+  }
+
+  async function fetchWithRetry(url, options = {}) {
+    let lastError;
+
+    for (let attempt = 0; attempt <= fetchRetryCount; attempt += 1) {
+      try {
+        const response = await downloadFetch(url, options);
+        if (!shouldRetryResponse(response) || attempt === fetchRetryCount) {
+          return response;
+        }
+        lastError = new Error(`HTTP error ${response.status}`);
+      } catch (error) {
+        lastError = error;
+        if (attempt === fetchRetryCount) {
+          throw error;
+        }
+      }
+
+      await delay(250 * (attempt + 1));
+    }
+
+    throw lastError;
+  }
+
+  function shouldRetryResponse(response) {
+    return response.status === 429 || response.status >= 500;
   }
 
   async function runPool(tasks, concurrency) {
@@ -114,26 +192,43 @@
   }
 
   function saveBlob(blob, fileName) {
+    if (!blob.size) {
+      return;
+    }
+
     const href = URL.createObjectURL(blob);
+    objectUrls.add(href);
+    saveUrl(href, fileName);
+  }
+
+  function saveUrl(href, fileName) {
     const anchor = document.createElement("a");
     anchor.href = href;
     anchor.download = fileName;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(href), 30_000);
+  }
+
+  function revokeObjectUrls() {
+    objectUrls.forEach((href) => URL.revokeObjectURL(href));
+    objectUrls.clear();
   }
 
   function hookFetch() {
-    const originalFetch = window.fetch;
-    if (typeof originalFetch !== "function") {
+    if (typeof window.fetch !== "function") {
       return;
     }
 
+    const originalFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
       const response = await originalFetch(...args);
-      const url = typeof args[0] === "string" ? args[0] : args[0]?.url || response.url;
-      reportCandidate(url, response.headers.get("Content-Type") || "", "fetch");
+      try {
+        const url = typeof args[0] === "string" ? args[0] : args[0]?.url || response.url;
+        reportCandidate(url, response.headers.get("Content-Type") || "", "fetch");
+      } catch {
+        // Fetch instrumentation must not change page request behavior.
+      }
       return response;
     };
   }
@@ -207,11 +302,35 @@
     }));
   }
 
+  function emitStatus(videoId, status, page, downloadId, error) {
+    if (!videoId) {
+      return;
+    }
+
+    document.dispatchEvent(new CustomEvent(`${videoId}_video_download_status`, {
+      detail: {
+        video_id: videoId,
+        status,
+        page,
+        download_id: downloadId,
+        error: error ? String(error?.message || error) : "",
+      },
+    }));
+  }
+
   function percent(received, total) {
     if (!total) {
       return "0.00";
     }
     return Math.min(100, (received / total) * 100).toFixed(2);
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function canUseNativeDownload(url) {
+    return String(url).startsWith("blob:");
   }
 
   function inferFileName(url, type) {

@@ -264,6 +264,65 @@ npm run typecheck
 
 当前项目以开发运行验证为主，不默认执行打包流程。
 
+### Local Automation Bridge
+
+Jarvis Browser includes a local automation bridge for inspecting and controlling the active `BrowserView` from local tools or coding agents. It is useful when debugging site extensions, Jarvis Script, Telegram media downloading, or page-specific automation without manually pasting code into DevTools.
+
+The bridge is disabled by default.
+
+To enable it:
+
+1. Open `jarvis-browser://settings`.
+2. Find **本机自动化桥**.
+3. Turn it on.
+4. Copy the local origin and token shown in Settings.
+
+The bridge only listens on `127.0.0.1` and every request must include the token:
+
+```bash
+export JARVIS_AUTOMATION_ORIGIN="http://127.0.0.1:17361"
+export JARVIS_AUTOMATION_TOKEN="<token from settings>"
+
+curl -H "Authorization: Bearer $JARVIS_AUTOMATION_TOKEN" \
+  "$JARVIS_AUTOMATION_ORIGIN/state"
+```
+
+Common endpoints:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/status` | `GET` | Bridge status, origin, port, token metadata |
+| `/state` | `GET` | Active tab and all open BrowserView-backed tabs |
+| `/tabs` | `GET` | Tab list only |
+| `/dom/query` | `POST` | Query DOM elements in the active or specified tab |
+| `/dom/snapshot` | `POST` | Return a bounded DOM tree snapshot |
+| `/eval` | `POST` | Execute JavaScript in the page context |
+| `/tg` | `POST` | Invoke the Telegram downloader content-script automation hook |
+
+Examples:
+
+```bash
+# Query page elements.
+curl -H "Authorization: Bearer $JARVIS_AUTOMATION_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"selector":"video,.media-container","limit":20}' \
+  "$JARVIS_AUTOMATION_ORIGIN/dom/query"
+
+# Evaluate an expression in the active BrowserView.
+curl -H "Authorization: Bearer $JARVIS_AUTOMATION_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"code":"document.title"}' \
+  "$JARVIS_AUTOMATION_ORIGIN/eval"
+
+# Run a Telegram downloader scan through the installed content script.
+curl -H "Authorization: Bearer $JARVIS_AUTOMATION_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"action":"scan"}' \
+  "$JARVIS_AUTOMATION_ORIGIN/tg"
+```
+
+`/eval`, `/dom/query`, `/dom/snapshot`, and `/tg` accept an optional `tabId` field. If omitted, the active Jarvis tab is used.
+
 ### Release and Updates
 
 Application updates are delivered through GitHub Releases. Packaged macOS and Windows builds can check for updates from `jarvis-browser://settings`; development mode does not perform real update checks.

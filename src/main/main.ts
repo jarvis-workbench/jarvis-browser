@@ -1,5 +1,6 @@
 import { app, BrowserWindow, nativeImage } from "electron";
 import { join } from "node:path";
+import { AutomationBridge } from "./automation-bridge";
 import { BrowserHost } from "./browser-host";
 import { configureElectronDataPaths } from "./data-paths";
 import { createDefaultProfilePartition, createSessionPartition } from "./electron-session-manager";
@@ -93,8 +94,10 @@ const createWindow = async () => {
 
   const browserHost = new BrowserHost(mainWindow, store, historyManager);
   const updateManager = new UpdateManager(mainWindow);
+  const automationBridge = new AutomationBridge(browserHost, store.getAutomationBridgeSettings());
+  await automationBridge.applySettings(store.getAutomationBridgeSettings());
   browserHost.bindDefaultDownloads();
-  registerIpc(store, browserHost, historyManager, storageManager, updateManager);
+  registerIpc(store, browserHost, historyManager, storageManager, updateManager, automationBridge);
   mainWindow.webContents.on("before-input-event", (event, input) => {
     if (browserHost.handleBrowserShortcut(input)) {
       event.preventDefault();
@@ -108,7 +111,9 @@ const createWindow = async () => {
     event.preventDefault();
     isClosingMainWindow = true;
     void browserHost.close().finally(() => {
-      mainWindow?.destroy();
+      void automationBridge.close().finally(() => {
+        mainWindow?.destroy();
+      });
     });
   });
 
