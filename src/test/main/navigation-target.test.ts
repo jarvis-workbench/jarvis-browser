@@ -16,10 +16,23 @@ test("adds https prefix for localhost with port", () => {
   });
 });
 
-test("keeps data urls in browser navigation", () => {
+test("blocks data urls in browser navigation", () => {
   const result = resolveNavigationTarget("data:image/png;base64,AAAA");
-  assert.equal(result.kind, "browser");
+  assert.equal(result.kind, "blocked");
   assert.equal(result.url, "data:image/png;base64,AAAA");
+  assert.match(result.errorText, /data:/);
+});
+
+test("blocks blob urls in browser navigation", () => {
+  const result = resolveNavigationTarget("blob:https://example.com/1234");
+  assert.equal(result.kind, "blocked");
+  assert.match(result.errorText, /blob:/);
+});
+
+test("blocks javascript urls in browser navigation", () => {
+  const result = resolveNavigationTarget("javascript:alert(1)");
+  assert.equal(result.kind, "blocked");
+  assert.match(result.errorText, /javascript:/);
 });
 
 test("keeps file urls in browser navigation", () => {
@@ -34,6 +47,12 @@ test("keeps about blank in browser navigation", () => {
     kind: "browser",
     url: "about:blank",
   });
+});
+
+test("blocks other about pages in browser navigation", () => {
+  const result = resolveNavigationTarget("about:srcdoc");
+  assert.equal(result.kind, "blocked");
+  assert.match(result.errorText, /about:srcdoc/);
 });
 
 test("routes mailto to external handler", () => {

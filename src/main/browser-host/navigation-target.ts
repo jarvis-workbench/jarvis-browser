@@ -20,10 +20,6 @@ const browserProtocols = new Set([
   "http:",
   "https:",
   "file:",
-  "data:",
-  "blob:",
-  "about:",
-  "javascript:",
   "jarvis-browser:",
 ]);
 
@@ -58,7 +54,16 @@ export function resolveNavigationTarget(rawUrl: string): NavigationTarget {
   }
 
   const normalizedUrl = parsed.toString();
-  if (browserProtocols.has(parsed.protocol)) {
+  const blockedBrowserSchemeMessage = blockedTopLevelBrowserSchemeMessage(parsed);
+  if (blockedBrowserSchemeMessage) {
+    return {
+      kind: "blocked",
+      url: normalizedUrl,
+      errorText: blockedBrowserSchemeMessage,
+    };
+  }
+
+  if (browserProtocols.has(parsed.protocol) || isAllowedAboutPage(parsed)) {
     return {
       kind: "browser",
       url: normalizedUrl,
@@ -111,6 +116,27 @@ export function toNavigationResult(target: NavigationTarget): BrowserNavigationR
 function isCustomExternalProtocol(protocol: string) {
   return protocol.endsWith(":")
     && !browserProtocols.has(protocol)
+    && protocol !== "about:"
+    && protocol !== "blob:"
+    && protocol !== "data:"
+    && protocol !== "javascript:"
     && protocol !== "http:"
     && protocol !== "https:";
+}
+
+function isAllowedAboutPage(parsed: URL) {
+  return parsed.protocol === "about:" && parsed.pathname === "blank";
+}
+
+function blockedTopLevelBrowserSchemeMessage(parsed: URL) {
+  switch (parsed.protocol) {
+    case "data:":
+    case "blob:":
+    case "javascript:":
+      return `暂不支持在标签页中直接打开 ${parsed.protocol} 地址`;
+    case "about:":
+      return isAllowedAboutPage(parsed) ? undefined : `暂不支持地址 ${parsed.toString()}`;
+    default:
+      return undefined;
+  }
 }

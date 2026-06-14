@@ -1030,6 +1030,13 @@ export class BrowserHost {
 
       void this.handleMainFrameNavigationEvent(event, tabId, event.url, event.isMainFrame);
     });
+    webContents.on("will-frame-navigate", (event) => {
+      if (!this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      this.handleSubFrameNavigationEvent(event, event.url, event.isMainFrame);
+    });
     webContents.on("will-redirect", (event) => {
       if (!this.isViewAlive(tabId, webContents)) {
         return;
@@ -1165,6 +1172,21 @@ export class BrowserHost {
     }
 
     await this.loadErrorPage(target.url, target.errorText, this.views.get(tabId), tabId);
+  }
+
+  private handleSubFrameNavigationEvent(
+    event: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>,
+    url: string,
+    isMainFrame: boolean,
+  ) {
+    if (isMainFrame) {
+      return;
+    }
+
+    const target = resolveNavigationTarget(url);
+    if (target.kind !== "browser") {
+      event.preventDefault();
+    }
   }
 
   private async handleHttpStatusPage(tabId: string, url: string, statusCode: number) {
