@@ -52,7 +52,13 @@ import {
 import { MetadataStore, normalizeHttpUrl } from "../store";
 import { ViewLifecycle } from "./lifecycle";
 import { JarvisMonitorController } from "./monitor/controller";
-import { formatNavigationError, isBrowserDevToolsShortcut, isBrowserReloadShortcut, isNavigationAbort } from "./navigation";
+import {
+  formatNavigationError,
+  isBrowserCloseTabShortcut,
+  isBrowserDevToolsShortcut,
+  isBrowserReloadShortcut,
+  isNavigationAbort,
+} from "./navigation";
 import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
 import { createBrowserState } from "./state";
 import { ViewRegistry } from "./view-registry";
@@ -277,6 +283,7 @@ export class BrowserHost {
     if (!tab) {
       return;
     }
+    const nextActiveTabId = this.activeTabId === tabId ? this.resolveNextActiveTabIdAfterClose(tab) : undefined;
 
     if (view) {
       await this.flushViewSession(view);
@@ -288,10 +295,9 @@ export class BrowserHost {
     this.cleanupViewLifecycle(tabId);
 
     if (this.activeTabId === tabId) {
-      const nextTab = [...this.tabs.values()].at(-1);
       this.activeTabId = undefined;
-      if (nextTab) {
-        await this.activateTab(nextTab.id, { emitTabs: false });
+      if (nextActiveTabId && this.tabs.has(nextActiveTabId)) {
+        await this.activateTab(nextActiveTabId, { emitTabs: false });
       } else {
         await this.openInternalPage({ pageId: "newtab" });
         return;
@@ -838,6 +844,16 @@ export class BrowserHost {
   }
 
   handleBrowserShortcut(input: Electron.Input) {
+    if (isBrowserCloseTabShortcut(input)) {
+      const activeTabId = this.activeTabId;
+      if (activeTabId) {
+        void this.closeTab(activeTabId).catch(() => {
+          // 没有激活标签时忽略关闭标签快捷键。
+        });
+      }
+      return true;
+    }
+
     if (isBrowserReloadShortcut(input)) {
       void this.reload().catch(() => {
         // 没有激活标签时忽略浏览器刷新快捷键。
@@ -855,6 +871,43 @@ export class BrowserHost {
     }
 
     return false;
+  }
+
+  private resolveNextActiveTabIdAfterClose(closingTab: BrowserTab) {
+    const remainingTabs = [...this.tabs.values()].filter((tab) => tab.id !== closingTab.id);
+    if (remainingTabs.length === 0) {
+      return undefined;
+    }
+
+    const sameSiteTabs = closingTab.siteId
+      ? remainingTabs.filter((tab) => tab.siteId === closingTab.siteId)
+      : [];
+    return this.closestTabIdByOrder(closingTab.id, sameSiteTabs)
+      || this.closestTabIdByOrder(closingTab.id, remainingTabs);
+  }
+
+  private closestTabIdByOrder(originTabId: string, candidates: BrowserTab[]) {
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const tabIds = [...this.tabs.keys()];
+    const originIndex = tabIds.indexOf(originTabId);
+    const candidateIds = new Set(candidates.map((tab) => tab.id));
+    for (let index = originIndex + 1; index < tabIds.length; index += 1) {
+      const tabId = tabIds[index];
+      if (candidateIds.has(tabId)) {
+        return tabId;
+      }
+    }
+    for (let index = originIndex - 1; index >= 0; index -= 1) {
+      const tabId = tabIds[index];
+      if (candidateIds.has(tabId)) {
+        return tabId;
+      }
+    }
+
+    return candidates.at(-1)?.id;
   }
 
   private createTabRecord(input: {
