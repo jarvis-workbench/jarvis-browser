@@ -1,4 +1,6 @@
 import { session } from "electron";
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   StorageClearDataInput,
   StorageClearDataResult,
@@ -23,11 +25,15 @@ export class StorageManager {
   async clearData(input: StorageClearDataInput): Promise<StorageClearDataResult> {
     const partition = cleanPartition(input.partition);
     const targetSession = session.fromPartition(partition);
-    await targetSession.clearCache();
+    await Promise.all([
+      targetSession.clearCache(),
+      targetSession.clearStorageData({ storages: ["cachestorage"] }),
+    ]);
 
     return {
       partition,
       cacheCleared: true,
+      serviceWorkerCacheCleared: true,
     };
   }
 
@@ -44,14 +50,42 @@ export class StorageManager {
 
   private async getPartitionStats(partition: string): Promise<StoragePartitionStats> {
     const targetSession = session.fromPartition(partition);
-    const cacheBytes = await targetSession.getCacheSize().catch(() => 0);
+    const storagePath = targetSession.getStoragePath() ?? undefined;
+    const [httpCacheBytes, serviceWorkerCacheBytes] = await Promise.all([
+      targetSession.getCacheSize().catch(() => 0),
+      storagePath ? directorySize(join(storagePath, "Service Worker", "CacheStorage")) : Promise.resolve(0),
+    ]);
 
     return {
       partition,
-      cacheBytes,
-      storagePath: targetSession.getStoragePath() ?? undefined,
+      cacheBytes: httpCacheBytes + serviceWorkerCacheBytes,
+      httpCacheBytes,
+      serviceWorkerCacheBytes,
+      storagePath,
     };
   }
+}
+
+async function directorySize(path: string): Promise<number> {
+  let total = 0;
+  const entries = await readdir(path, { withFileTypes: true }).catch(() => []);
+
+  await Promise.all(entries.map(async (entry) => {
+    const entryPath = join(path, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySize(entryPath);
+      return;
+    }
+
+    if (!entry.isFile()) {
+      return;
+    }
+
+    const stats = await stat(entryPath).catch(() => undefined);
+    total += stats?.size ?? 0;
+  }));
+
+  return total;
 }
 
 function cleanPartition(partition: string) {

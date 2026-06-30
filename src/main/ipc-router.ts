@@ -102,7 +102,10 @@ export class IpcRouter {
         });
 
         if (options.cache) {
-          await targetSession.clearCache();
+          await Promise.all([
+            targetSession.clearCache(),
+            targetSession.clearStorageData({ storages: ["cachestorage"] }),
+          ]);
         }
       },
     );

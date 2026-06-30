@@ -392,6 +392,8 @@ export interface StorageStatsInput {
 export interface StoragePartitionStats {
   partition: string;
   cacheBytes: number;
+  httpCacheBytes: number;
+  serviceWorkerCacheBytes: number;
   storagePath?: string;
 }
 
@@ -402,6 +404,7 @@ export interface StorageClearDataInput {
 export interface StorageClearDataResult {
   partition: string;
   cacheCleared: boolean;
+  serviceWorkerCacheCleared: boolean;
 }
 
 export type SessionSyncScope = "global" | "site";

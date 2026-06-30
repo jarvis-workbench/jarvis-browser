@@ -17,6 +17,8 @@ type CacheTarget = {
   site: Site;
   session: SiteSession;
   cacheBytes: number;
+  httpCacheBytes: number;
+  serviceWorkerCacheBytes: number;
   historyCount: number;
   lastVisitedAt?: string;
 };
@@ -24,6 +26,8 @@ type CacheTarget = {
 type SiteGroup = {
   site: Site;
   cacheBytes: number;
+  httpCacheBytes: number;
+  serviceWorkerCacheBytes: number;
   historyCount: number;
   lastVisitedAt?: string;
   targets: CacheTarget[];
@@ -61,6 +65,8 @@ const cacheTargets = computed<CacheTarget[]>(() => {
         site,
         session,
         cacheBytes: stats?.cacheBytes ?? 0,
+        httpCacheBytes: stats?.httpCacheBytes ?? stats?.cacheBytes ?? 0,
+        serviceWorkerCacheBytes: stats?.serviceWorkerCacheBytes ?? 0,
         historyCount: history?.count ?? 0,
         lastVisitedAt: history?.lastVisitedAt,
       };
@@ -99,11 +105,15 @@ const groupedTargets = computed<SiteGroup[]>(() => {
     const current = groups.get(target.site.id) ?? {
       site: target.site,
       cacheBytes: 0,
+      httpCacheBytes: 0,
+      serviceWorkerCacheBytes: 0,
       historyCount: 0,
       lastVisitedAt: undefined,
       targets: [],
     };
     current.cacheBytes += target.cacheBytes;
+    current.httpCacheBytes += target.httpCacheBytes;
+    current.serviceWorkerCacheBytes += target.serviceWorkerCacheBytes;
     current.historyCount += target.historyCount;
     if (target.lastVisitedAt && (!current.lastVisitedAt || target.lastVisitedAt > current.lastVisitedAt)) {
       current.lastVisitedAt = target.lastVisitedAt;
@@ -131,6 +141,9 @@ const groupedTargets = computed<SiteGroup[]>(() => {
 
 const visibleTargetCount = computed(() => displayedTargets.value.length);
 const totalCacheBytes = computed(() => displayedTargets.value.reduce((total, target) => total + target.cacheBytes, 0));
+const totalServiceWorkerCacheBytes = computed(() =>
+  displayedTargets.value.reduce((total, target) => total + target.serviceWorkerCacheBytes, 0),
+);
 const totalSiteCount = computed(() => new Set(displayedTargets.value.map((target) => target.site.id)).size);
 const totalHistoryCount = computed(() =>
   displayedTargets.value.reduce((total, target) => total + target.historyCount, 0),
@@ -159,7 +172,7 @@ async function loadStats() {
 }
 
 async function clearBrowsingData() {
-  if (!canClear.value || !window.confirm('清理当前筛选出的站点缓存？不会清理 Cookie、LocalStorage 或登录状态。')) {
+  if (!canClear.value || !window.confirm('清理当前筛选出的站点缓存？不会清理 Cookie、LocalStorage、IndexedDB 或登录状态。')) {
     return;
   }
 
@@ -191,6 +204,17 @@ function sizeText(bytes: number) {
   }
 
   return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function cacheBreakdownText(target: Pick<CacheTarget, 'httpCacheBytes' | 'serviceWorkerCacheBytes'>) {
+  const parts = [];
+  if (target.httpCacheBytes) {
+    parts.push(`HTTP ${sizeText(target.httpCacheBytes)}`);
+  }
+  if (target.serviceWorkerCacheBytes) {
+    parts.push(`Service Worker ${sizeText(target.serviceWorkerCacheBytes)}`);
+  }
+  return parts.join(' · ');
 }
 
 function hourText(value?: string) {
@@ -291,7 +315,7 @@ function unique(values: string[]) {
           </label>
 
           <div class="clear-data-note">
-            仅清理 HTTP 缓存，不会清理 Cookie、LocalStorage、IndexedDB 或历史记录。
+            清理 HTTP 缓存和 Service Worker 缓存，不会清理 Cookie、LocalStorage、IndexedDB 或历史记录。
           </div>
 
           <ElButton
@@ -327,6 +351,10 @@ function unique(values: string[]) {
               <strong>{{ sizeText(totalCacheBytes) }}</strong>
               缓存
             </span>
+            <span v-if="totalServiceWorkerCacheBytes">
+              <strong>{{ sizeText(totalServiceWorkerCacheBytes) }}</strong>
+              Service Worker
+            </span>
           </div>
 
           <p v-if="!groupedTargets.length" class="clear-data-empty">
@@ -343,7 +371,10 @@ function unique(values: string[]) {
                 <strong>{{ siteDisplayTitle(group.site) }}</strong>
                 <small>{{ siteHost(group.site) }}</small>
               </span>
-              <span>{{ group.targets.length }} 个会话 · {{ sizeText(group.cacheBytes) }} 缓存</span>
+              <span class="cache-size-cell">
+                {{ group.targets.length }} 个会话 · {{ sizeText(group.cacheBytes) }} 缓存
+                <small v-if="cacheBreakdownText(group)">{{ cacheBreakdownText(group) }}</small>
+              </span>
             </header>
 
             <div class="site-cache-list">
@@ -357,7 +388,10 @@ function unique(values: string[]) {
                   <small>{{ hourText(target.lastVisitedAt) }}</small>
                 </span>
                 <span>{{ target.historyCount }} 次访问</span>
-                <span>{{ sizeText(target.cacheBytes) }}</span>
+                <span class="cache-size-cell">
+                  {{ sizeText(target.cacheBytes) }}
+                  <small v-if="cacheBreakdownText(target)">{{ cacheBreakdownText(target) }}</small>
+                </span>
               </div>
             </div>
           </article>
@@ -500,8 +534,8 @@ function unique(values: string[]) {
   gap: 3px;
 }
 
-.site-cache-block header strong,
-.site-cache-block header small {
+.site-cache-block__title strong,
+.site-cache-block__title small {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -522,6 +556,17 @@ function unique(values: string[]) {
   flex: 0 0 auto;
   color: #5f6368;
   font-size: 12px;
+}
+
+.cache-size-cell {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
+
+.cache-size-cell small {
+  color: #7a8087;
+  font-size: 11px;
 }
 
 .site-cache-list {
