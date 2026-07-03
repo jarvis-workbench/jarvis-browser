@@ -58,6 +58,7 @@ import {
   isBrowserDevToolsShortcut,
   isBrowserReloadShortcut,
   isNavigationAbort,
+  resolveNextActiveTabIdAfterClose,
 } from "./navigation";
 import { resolveNavigationTarget, toNavigationResult, type NavigationTarget } from "./navigation-target";
 import { createBrowserState } from "./state";
@@ -283,7 +284,9 @@ export class BrowserHost {
     if (!tab) {
       return;
     }
-    const nextActiveTabId = this.activeTabId === tabId ? this.resolveNextActiveTabIdAfterClose(tab) : undefined;
+    const nextActiveTabId = this.activeTabId === tabId
+      ? resolveNextActiveTabIdAfterClose(tab, this.tabs.values())
+      : undefined;
 
     if (view) {
       await this.flushViewSession(view);
@@ -871,43 +874,6 @@ export class BrowserHost {
     }
 
     return false;
-  }
-
-  private resolveNextActiveTabIdAfterClose(closingTab: BrowserTab) {
-    const remainingTabs = [...this.tabs.values()].filter((tab) => tab.id !== closingTab.id);
-    if (remainingTabs.length === 0) {
-      return undefined;
-    }
-
-    const sameSiteTabs = closingTab.siteId
-      ? remainingTabs.filter((tab) => tab.siteId === closingTab.siteId)
-      : [];
-    return this.closestTabIdByOrder(closingTab.id, sameSiteTabs)
-      || this.closestTabIdByOrder(closingTab.id, remainingTabs);
-  }
-
-  private closestTabIdByOrder(originTabId: string, candidates: BrowserTab[]) {
-    if (candidates.length === 0) {
-      return undefined;
-    }
-
-    const tabIds = [...this.tabs.keys()];
-    const originIndex = tabIds.indexOf(originTabId);
-    const candidateIds = new Set(candidates.map((tab) => tab.id));
-    for (let index = originIndex + 1; index < tabIds.length; index += 1) {
-      const tabId = tabIds[index];
-      if (candidateIds.has(tabId)) {
-        return tabId;
-      }
-    }
-    for (let index = originIndex - 1; index >= 0; index -= 1) {
-      const tabId = tabIds[index];
-      if (candidateIds.has(tabId)) {
-        return tabId;
-      }
-    }
-
-    return candidates.at(-1)?.id;
   }
 
   private createTabRecord(input: {
