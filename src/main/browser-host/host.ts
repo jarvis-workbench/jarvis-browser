@@ -153,20 +153,13 @@ export class BrowserHost {
       internalPageId: kind === "internal" ? "newtab" : undefined,
     });
 
-    if (tab.kind === "default") {
-      await this.extensionRuntime.loadEnabledForDefaultProfile();
-      await this.jarvisScriptRuntime.refreshUserScriptWorkers();
-    }
-    if (isSessionChildTab && openerSiteId) {
-      const site = this.store.getSite(openerSiteId);
-      if (site) {
-        this.runViewTask(tab.id, this.extensionRuntime.loadEnabledForSite(site));
-      }
-    }
     await this.createViewForTab(tab, targetSession);
-    await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
     await this.activateTab(tab.id, { emitTabs: false });
     this.emitTabsChanged();
+    this.runViewTask(tab.id, this.prepareAndLoadCreatedTab(tab.id, url, {
+      siteId: isSessionChildTab ? openerSiteId : undefined,
+      defaultProfile: tab.kind === "default",
+    }));
     return structuredClone(tab);
   }
 
@@ -223,8 +216,8 @@ export class BrowserHost {
 
     await this.createViewForTab(tab, getDefaultProfileSession());
     await this.activateTab(tab.id, { emitTabs: false });
-    await this.loadUrlSafely(url, this.views.get(tab.id), tab.id);
     this.emitTabsChanged();
+    this.runViewTask(tab.id, this.loadCreatedTab(tab.id, url));
     return structuredClone(tab);
   }
 
@@ -379,6 +372,7 @@ export class BrowserHost {
   }
 
   openDevTools() {
+    const tab = this.requireActiveTab();
     const webContents = this.getActiveView().webContents;
     if (webContents.isDevToolsOpened()) {
       webContents.closeDevTools();
@@ -391,7 +385,12 @@ export class BrowserHost {
       }
     };
 
-    webContents.once("devtools-opened", restoreMainWindowFocus);
+    const handleDevToolsOpened = () => {
+      restoreMainWindowFocus();
+      this.bindDevToolsNavigationEvents(webContents, tab.id);
+    };
+
+    webContents.once("devtools-opened", handleDevToolsOpened);
 
     try {
       // Intentionally omit `mode` so Chromium can reuse the last selected dock state
@@ -400,7 +399,7 @@ export class BrowserHost {
         activate: false,
       });
     } catch (error) {
-      webContents.removeListener("devtools-opened", restoreMainWindowFocus);
+      webContents.removeListener("devtools-opened", handleDevToolsOpened);
       throw error;
     }
   }
@@ -1042,6 +1041,10 @@ export class BrowserHost {
       }
       return { action: "deny" };
     });
+    webContents.on("devtools-open-url", (event, url) => {
+      event.preventDefault();
+      this.openDevToolsTarget(tabId, url, webContents);
+    });
     webContents.on("will-navigate", (event) => {
       if (!this.isViewAlive(tabId, webContents)) {
         return;
@@ -1110,6 +1113,35 @@ export class BrowserHost {
         this.emitTabsChanged();
       }
     });
+  }
+
+  private bindDevToolsNavigationEvents(inspectedWebContents: Electron.WebContents, tabId: string) {
+    const devToolsWebContents = inspectedWebContents.devToolsWebContents;
+    if (!devToolsWebContents || devToolsWebContents.isDestroyed()) {
+      return;
+    }
+
+    devToolsWebContents.setWindowOpenHandler(({ url }) => {
+      if (!this.isViewAlive(tabId, inspectedWebContents)) {
+        return { action: "deny" };
+      }
+
+      this.openDevToolsTarget(tabId, url, inspectedWebContents);
+      return { action: "deny" };
+    });
+  }
+
+  private openDevToolsTarget(tabId: string, url: string, inspectedWebContents: Electron.WebContents) {
+    if (!this.isViewAlive(tabId, inspectedWebContents)) {
+      return;
+    }
+
+    const target = resolveNavigationTarget(url);
+    if (target.kind === "browser") {
+      void this.createTab({ url: target.url, openerTabId: tabId });
+    } else if (target.kind === "external") {
+      void this.openExternalTarget(target, tabId);
+    }
   }
 
   private handleNavigation(tabId: string, url: string) {
@@ -1295,6 +1327,40 @@ export class BrowserHost {
     }
 
     await this.loadUrlSafely(normalizeHttpUrl(site.url), view, tabId);
+  }
+
+  private async prepareAndLoadCreatedTab(
+    tabId: string,
+    url: string,
+    options: { siteId?: string; defaultProfile?: boolean },
+  ) {
+    try {
+      if (options.defaultProfile) {
+        await this.extensionRuntime.loadEnabledForDefaultProfile();
+        await this.jarvisScriptRuntime.refreshUserScriptWorkers();
+      } else if (options.siteId) {
+        const site = this.store.getSite(options.siteId);
+        if (site) {
+          await this.extensionRuntime.loadEnabledForSite(site);
+          await this.jarvisScriptRuntime.refreshUserScriptWorkers();
+        }
+      }
+    } catch (error) {
+      if (this.isViewAlive(tabId)) {
+        console.error(`[browser] ${tabId} 新标签准备失败`, error);
+      }
+    }
+
+    await this.loadCreatedTab(tabId, url);
+  }
+
+  private async loadCreatedTab(tabId: string, url: string) {
+    const view = this.views.get(tabId);
+    if (!view || !this.isViewAlive(tabId, view.webContents)) {
+      return;
+    }
+
+    await this.loadUrlSafely(url, view, tabId);
   }
 
   private async sendJarvisScriptMessageToWebContents(input: {
