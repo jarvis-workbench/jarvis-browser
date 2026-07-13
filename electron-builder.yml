@@ -18,7 +18,7 @@ extraResources:
 directories:
   output: release
 mac:
-  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+  artifactName: Jarvis-Browser-${version}-${os}-${arch}.${ext}
   category: public.app-category.productivity
   target:
     - target: dmg
@@ -30,9 +30,18 @@ mac:
         - x64
         - arm64
 win:
-  artifactName: ${productName}-${version}-${os}-${arch}-setup.${ext}
+  artifactName: Jarvis-Browser-${version}-${os}-${arch}-setup.${ext}
   target:
     - target: nsis
+      arch:
+        - x64
+linux:
+  artifactName: Jarvis-Browser-${version}-${os}-${arch}.${ext}
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: zip
       arch:
         - x64
 nsis:
