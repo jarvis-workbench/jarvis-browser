@@ -134,6 +134,12 @@ export class IpcRouter {
     this.route("browser:reload", () => this.browserHost.reload());
     this.route("browser:reload-internal-error", () => this.browserHost.reloadErrorPage());
     this.route("browser:stop", () => this.browserHost.stop());
+    this.route("browser:find-in-page", (_event, input: Parameters<AppApi["browser"]["findInPage"]>[0]) =>
+      this.browserHost.findInPage(input),
+    );
+    this.route("browser:stop-find-in-page", (_event, action: Parameters<AppApi["browser"]["stopFindInPage"]>[0]) =>
+      this.browserHost.stopFindInPage(action),
+    );
     this.route("browser:show-home", () => this.browserHost.showHome());
     this.route("browser:hide-embedded-view", () => this.browserHost.hideEmbeddedView());
     this.route("browser:show-active-view", () => this.browserHost.showActiveView());

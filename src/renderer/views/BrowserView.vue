@@ -4,6 +4,7 @@ import {
   Close,
   Code,
   Delete,
+  Down,
   Download,
   Home,
   Left,
@@ -12,8 +13,10 @@ import {
   Puzzle,
   Refresh,
   Right,
+  Search,
   Setting,
   Time,
+  Up,
 } from '@icon-park/vue-next';
 import {
   ElButton,
@@ -21,7 +24,7 @@ import {
   ElMessage,
 } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { BrowserRect, Site, SiteSession } from '../../shared/types';
+import type { BrowserFindInPageResult, BrowserRect, Site, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
 import {
@@ -41,6 +44,7 @@ import { formatError } from '../../shared/utils';
 
 const browser = useBrowserStore();
 const browserHost = ref<HTMLElement | null>(null);
+const findInput = ref<HTMLInputElement | null>(null);
 type ActivePanel = 'tabPicker' | 'sessionDrawer' | 'sessionCreator' | null;
 const activePanel = ref<ActivePanel>(null);
 const sessionDrawerVisible = ref(false);
@@ -50,9 +54,14 @@ const creatingSessionSubmitting = ref(false);
 const newSessionName = ref('');
 const creatingSessionSite = ref<Site | null>(null);
 const nowTick = ref(Date.now());
+const findBarVisible = ref(false);
+const findQuery = ref('');
+const findResult = ref<BrowserFindInPageResult | null>(null);
 
 let resizeObserver: ResizeObserver | undefined;
 let downloadActivityTimer: number | undefined;
+let removeOpenFindBarListener: (() => void) | undefined;
+let removeFindResultListener: (() => void) | undefined;
 let pendingDragOrderKey = '';
 let activeDragPayload: TabDragPayload | null = null;
 
@@ -104,6 +113,24 @@ const downloadProgress = computed(() => {
   const totalBytes = activeDownloads.reduce((total, download) => total + download.totalBytes, 0);
   return totalBytes ? Math.max(0, Math.min(100, Math.round((receivedBytes / totalBytes) * 100))) : 0;
 });
+const findStatusText = computed(() => {
+  if (!findQuery.value) {
+    return '0/0';
+  }
+
+  const result = findResult.value;
+  if (!result || result.query !== findQuery.value || result.matches <= 0) {
+    return '0/0';
+  }
+
+  return `${result.activeMatchOrdinal}/${result.matches}`;
+});
+const findHasNoMatches = computed(() => (
+  Boolean(findQuery.value)
+  && findResult.value?.query === findQuery.value
+  && findResult.value.finalUpdate
+  && findResult.value.matches === 0
+));
 
 async function setActivePanel(panel: ActivePanel) {
   if (panel) {
@@ -261,6 +288,63 @@ async function browserAction(action: 'back' | 'forward' | 'reload' | 'stop') {
     await browser.browserAction(action);
   } catch (error) {
     ElMessage.error(formatError(error));
+  }
+}
+
+async function openFindBar() {
+  findBarVisible.value = true;
+  await window.appApi.overlays.close();
+  await nextTick();
+  findInput.value?.focus();
+  findInput.value?.select();
+  if (findQuery.value) {
+    await runFind(true);
+  }
+}
+
+async function closeFindBar() {
+  findBarVisible.value = false;
+  findResult.value = null;
+  await window.appApi.browser.stopFindInPage('clearSelection');
+}
+
+async function runFind(startNewSession: boolean, forward = true) {
+  try {
+    if (!findQuery.value) {
+      findResult.value = null;
+      await window.appApi.browser.stopFindInPage('clearSelection');
+      return;
+    }
+
+    await window.appApi.browser.findInPage({
+      text: findQuery.value,
+      forward,
+      findNext: startNewSession,
+    });
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+function onFindInput() {
+  findResult.value = null;
+  void runFind(true);
+}
+
+function findNextMatch(forward: boolean) {
+  void runFind(false, forward);
+}
+
+function handleFindKeydown(event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    findNextMatch(!event.shiftKey);
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    void closeFindBar();
   }
 }
 
@@ -488,6 +572,16 @@ onMounted(async () => {
   downloadActivityTimer = window.setInterval(() => {
     nowTick.value = Date.now();
   }, 500);
+  removeOpenFindBarListener = window.appApi.onOpenFindBar(() => {
+    void openFindBar();
+  });
+  removeFindResultListener = window.appApi.onBrowserFindResult((result) => {
+    if (result.tabId !== browser.activeTabId || result.query !== findQuery.value) {
+      return;
+    }
+
+    findResult.value = result;
+  });
   await ensureSiteOpen();
   if (browserHost.value) {
     resizeObserver = new ResizeObserver(() => {
@@ -499,6 +593,11 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
+  removeOpenFindBarListener?.();
+  removeFindResultListener?.();
+  if (findBarVisible.value) {
+    void window.appApi.browser.stopFindInPage('clearSelection');
+  }
   if (downloadActivityTimer !== undefined) {
     window.clearInterval(downloadActivityTimer);
   }
@@ -508,6 +607,16 @@ watch(
   () => [browserInsetLeft.value, browserInsetRight.value],
   ([insetLeft, insetRight]) => {
     browser.scheduleBrowserBounds(browserHost.value, insetLeft, insetRight);
+  },
+);
+
+watch(
+  () => browser.activeTabId,
+  () => {
+    findResult.value = null;
+    if (findBarVisible.value && findQuery.value) {
+      void nextTick().then(() => runFind(true));
+    }
   },
 );
 
@@ -729,6 +838,37 @@ watch(
           </button>
         </div>
       </form>
+
+      <form
+        v-if="findBarVisible"
+        class="browser-find-popover"
+        aria-label="网页查找"
+        @submit.prevent="findNextMatch(true)"
+      >
+        <div class="browser-find-box" :class="{ 'browser-find-box--empty': findHasNoMatches }">
+          <Search theme="outline" size="16" />
+          <input
+            ref="findInput"
+            v-model="findQuery"
+            type="text"
+            aria-label="查找"
+            placeholder="查找"
+            @input="onFindInput"
+            @keydown="handleFindKeydown"
+          />
+          <span class="browser-find-box__count">{{ findStatusText }}</span>
+          <button type="button" title="上一个" :disabled="!findQuery" @click="findNextMatch(false)">
+            <Up theme="outline" size="15" />
+          </button>
+          <button type="button" title="下一个" :disabled="!findQuery" @click="findNextMatch(true)">
+            <Down theme="outline" size="15" />
+          </button>
+          <button type="button" title="关闭" @click="closeFindBar">
+            <Close theme="outline" size="15" />
+          </button>
+        </div>
+      </form>
+
     </section>
 
     <section ref="browserHost" class="browser-viewport">
@@ -778,6 +918,12 @@ watch(
   grid-template-rows: var(--titlebar-height) 34px 30px 48px;
 }
 
+.chrome-top {
+  position: relative;
+  z-index: 24;
+  overflow: visible;
+}
+
 .chrome-toolbar {
   grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
 }
@@ -821,6 +967,77 @@ watch(
   flex: 0 0 auto;
   border-radius: 50%;
   background: #1a73e8;
+}
+
+.browser-find-popover {
+  position: absolute;
+  right: 66px;
+  bottom: 8px;
+  z-index: 30;
+  width: min(420px, calc(100% - 32px));
+  pointer-events: auto;
+}
+
+.browser-find-box {
+  display: grid;
+  width: 100%;
+  height: 40px;
+  grid-template-columns: 18px minmax(80px, 1fr) auto repeat(3, 32px);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  padding: 0 6px 0 12px;
+  background: #ffffff;
+  color: #3c4043;
+  box-shadow: 0 6px 18px rgba(60, 64, 67, 0.22);
+}
+
+.browser-find-box--empty {
+  border-color: #d93025;
+}
+
+.browser-find-box input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #202124;
+  font-size: 13px;
+}
+
+.browser-find-box__count {
+  min-width: 42px;
+  color: #5f6368;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.browser-find-box button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #3c4043;
+}
+
+.browser-find-box button:hover:not(:disabled) {
+  background: rgba(60, 64, 67, 0.12);
+}
+
+.browser-find-box button:disabled {
+  color: #bdc1c6;
+  cursor: default;
+}
+
+.browser-find-popover,
+.browser-find-popover * {
+  -webkit-app-region: no-drag;
 }
 
 .chrome-session-tabs {

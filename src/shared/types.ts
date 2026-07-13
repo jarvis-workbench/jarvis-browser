@@ -205,6 +205,28 @@ export type BrowserNavigationResult =
     errorText: string;
   };
 
+export interface BrowserFindInPageInput {
+  text: string;
+  forward?: boolean;
+  findNext?: boolean;
+  matchCase?: boolean;
+}
+
+export interface BrowserFindInPageRequest {
+  tabId: string;
+  requestId: number;
+  query: string;
+}
+
+export interface BrowserFindInPageResult {
+  tabId: string;
+  requestId: number;
+  query: string;
+  activeMatchOrdinal: number;
+  matches: number;
+  finalUpdate: boolean;
+}
+
 export interface TabState extends BrowserState {
   tabId: string;
 }
@@ -576,6 +598,8 @@ export interface AppApi {
     forward(): Promise<void>;
     reload(): Promise<void>;
     stop(): Promise<void>;
+    findInPage(input: BrowserFindInPageInput): Promise<BrowserFindInPageRequest | undefined>;
+    stopFindInPage(action?: 'clearSelection' | 'keepSelection' | 'activateSelection'): Promise<void>;
     showHome(): Promise<void>;
     hideEmbeddedView(): Promise<void>;
     showActiveView(): Promise<void>;
@@ -661,6 +685,8 @@ export interface AppApi {
   windowChrome: WindowChromeInfo;
   onBrowserStateChanged(callback: (state: BrowserState) => void): () => void;
   onBrowserTabsChanged(callback: (state: { activeTabId?: string; tabs: BrowserTab[] }) => void): () => void;
+  onOpenFindBar(callback: () => void): () => void;
+  onBrowserFindResult(callback: (result: BrowserFindInPageResult) => void): () => void;
   onSiteMetadataUpdated(callback: (sites: Site[]) => void): () => void;
   onDownloadUpdated(callback: (download: DownloadState) => void): () => void;
   onExtensionUpdated(callback: (siteId: string, extensions: SiteExtension[]) => void): () => void;

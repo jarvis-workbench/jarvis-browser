@@ -7,6 +7,8 @@ import type {
   AutomationDomSnapshotResult,
   AutomationEvaluateInput,
   AutomationEvaluateResult,
+  BrowserFindInPageInput,
+  BrowserFindInPageRequest,
   AutomationTabInfo,
   AutomationTelegramInput,
   AutomationTelegramResult,
@@ -56,6 +58,7 @@ import {
   formatNavigationError,
   isBrowserCloseTabShortcut,
   isBrowserDevToolsShortcut,
+  isBrowserFindShortcut,
   isBrowserReloadShortcut,
   isNavigationAbort,
   resolveNextActiveTabIdAfterClose,
@@ -72,6 +75,8 @@ type HttpStatusListener = {
   webContentsIds: Map<number, string>;
 };
 
+type StopFindInPageAction = "clearSelection" | "keepSelection" | "activateSelection";
+
 
 
 export class BrowserHost {
@@ -84,6 +89,7 @@ export class BrowserHost {
   private readonly externalNavigationUrls = new Map<string, string>();
   private readonly responseStatusCodes = new Map<string, number>();
   private readonly httpStatusListeners = new Map<string, HttpStatusListener>();
+  private readonly findRequests = new Map<string, BrowserFindInPageRequest>();
   private tabsChangedQueued = false;
   private activeTabId?: string;
   private bounds = defaultBrowserBounds;
@@ -262,7 +268,11 @@ export class BrowserHost {
     }
 
     this.browserOverlayHost.closeOverlay();
-    const wasActive = this.activeTabId === tab.id;
+    const previousActiveTabId = this.activeTabId;
+    const wasActive = previousActiveTabId === tab.id;
+    if (previousActiveTabId && !wasActive) {
+      this.stopFindInPageForTab(previousActiveTabId, "clearSelection");
+    }
     this.activeTabId = tab.id;
     this.viewRegistry.activate(tab.id);
     this.emitBrowserState(tab.id);
@@ -288,6 +298,7 @@ export class BrowserHost {
     }
     this.tabs.delete(tabId);
     this.viewStates.delete(tabId);
+    this.findRequests.delete(tabId);
     this.cleanupViewLifecycle(tabId);
 
     if (this.activeTabId === tabId) {
@@ -426,6 +437,44 @@ export class BrowserHost {
     this.getActiveView().webContents.stop();
   }
 
+  openFindBar() {
+    if (!this.window.isDestroyed() && !this.window.webContents.isDestroyed()) {
+      this.window.webContents.focus();
+    }
+    this.sendToWebContents("browser:open-find-bar");
+  }
+
+  findInPage(input: BrowserFindInPageInput): BrowserFindInPageRequest | undefined {
+    const query = input.text;
+    if (!query) {
+      this.stopFindInPage("clearSelection");
+      return undefined;
+    }
+
+    const tab = this.requireActiveTab();
+    const view = this.getActiveView();
+    const requestId = view.webContents.findInPage(query, {
+      forward: input.forward ?? true,
+      findNext: Boolean(input.findNext),
+      matchCase: Boolean(input.matchCase),
+    });
+    const request = {
+      tabId: tab.id,
+      requestId,
+      query,
+    } satisfies BrowserFindInPageRequest;
+    this.findRequests.set(tab.id, request);
+    return request;
+  }
+
+  stopFindInPage(action: StopFindInPageAction = "clearSelection") {
+    if (!this.activeTabId) {
+      return;
+    }
+
+    this.stopFindInPageForTab(this.activeTabId, action);
+  }
+
   async showHome() {
     await this.openInternalPage({ pageId: "newtab" });
   }
@@ -460,6 +509,7 @@ export class BrowserHost {
     this.failedNavigationStatusCodes.clear();
     this.responseStatusCodes.clear();
     this.httpStatusListeners.clear();
+    this.findRequests.clear();
     this.activeTabId = undefined;
     this.viewRegistry.setMountedViewKey(undefined);
     this.jarvisScriptRuntime.close();
@@ -846,6 +896,11 @@ export class BrowserHost {
   }
 
   handleBrowserShortcut(input: Electron.Input) {
+    if (isBrowserFindShortcut(input)) {
+      this.openFindBar();
+      return true;
+    }
+
     if (isBrowserCloseTabShortcut(input)) {
       const activeTabId = this.activeTabId;
       if (activeTabId) {
@@ -1069,6 +1124,21 @@ export class BrowserHost {
     webContents.on("did-start-loading", () => this.emitBrowserStateIfAlive(tabId, webContents));
     webContents.on("did-finish-load", () => this.emitBrowserStateIfAlive(tabId, webContents));
     webContents.on("did-stop-loading", () => this.emitBrowserStateIfAlive(tabId, webContents));
+    webContents.on("found-in-page", (_event, result) => {
+      const request = this.findRequests.get(tabId);
+      if (!request || request.requestId !== result.requestId || !this.isViewAlive(tabId, webContents)) {
+        return;
+      }
+
+      this.sendToWebContents("browser:find-result", {
+        tabId,
+        requestId: result.requestId,
+        query: request.query,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+        matches: result.matches,
+        finalUpdate: result.finalUpdate,
+      });
+    });
     webContents.on("before-mouse-event", (_event, mouse) => {
       if (this.isViewAlive(tabId, webContents) && mouse.type === "mouseDown") {
         this.browserOverlayHost.dismissFromPageInteraction();
@@ -1666,6 +1736,20 @@ export class BrowserHost {
       isLoading: view.webContents.isLoading(),
       webContentsId: view.webContents.id,
     };
+  }
+
+  private stopFindInPageForTab(tabId: string, action: StopFindInPageAction) {
+    const view = this.views.get(tabId);
+    if (!view || view.webContents.isDestroyed()) {
+      this.findRequests.delete(tabId);
+      return;
+    }
+
+    try {
+      view.webContents.stopFindInPage(action);
+    } finally {
+      this.findRequests.delete(tabId);
+    }
   }
 
   private getActiveView() {

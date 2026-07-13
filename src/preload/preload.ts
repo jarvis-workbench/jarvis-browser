@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, AppUpdateStatus, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
+import type { AppApi, AppUpdateStatus, BrowserFindInPageResult, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -52,6 +52,8 @@ const appApi: AppApi = {
     forward: () => invoke("browser:forward"),
     reload: () => invoke("browser:reload"),
     stop: () => invoke("browser:stop"),
+    findInPage: (input) => invoke("browser:find-in-page", input),
+    stopFindInPage: (action) => invoke("browser:stop-find-in-page", action),
     showHome: () => invoke("browser:show-home"),
     hideEmbeddedView: () => invoke("browser:hide-embedded-view"),
     showActiveView: () => invoke("browser:show-active-view"),
@@ -137,6 +139,8 @@ const appApi: AppApi = {
   windowChrome,
   onBrowserStateChanged: (callback) => on<[BrowserState]>("browser:state-changed", callback),
   onBrowserTabsChanged: (callback) => on<[{ activeTabId?: string; tabs: BrowserTab[] }]>("browser:tabs-changed", callback),
+  onOpenFindBar: (callback) => on<[]>("browser:open-find-bar", callback),
+  onBrowserFindResult: (callback) => on<[BrowserFindInPageResult]>("browser:find-result", callback),
   onSiteMetadataUpdated: (callback) => on<[Site[]]>("site:metadata-updated", callback),
   onDownloadUpdated: (callback) => on<[DownloadState]>("download:updated", callback),
   onExtensionUpdated: (callback) => on<[string, SiteExtension[]]>("extension:updated", callback),

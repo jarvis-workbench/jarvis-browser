@@ -16,6 +16,14 @@ export function isBrowserCloseTabShortcut(input: Electron.Input) {
   return input.type === "keyDown" && key === "w" && (input.control || input.meta) && !input.alt && !input.shift;
 }
 
+export function isBrowserFindShortcut(input: Electron.Input) {
+  const key = input.key.toLowerCase();
+  const isPlatformModifier = process.platform === "darwin"
+    ? input.meta
+    : input.control && !input.meta;
+  return input.type === "keyDown" && key === "f" && isPlatformModifier && !input.alt && !input.shift;
+}
+
 export function formatNavigationError(error: unknown) {
   return formatError(error);
 }
