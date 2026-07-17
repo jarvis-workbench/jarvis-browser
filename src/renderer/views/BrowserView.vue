@@ -57,6 +57,8 @@ const nowTick = ref(Date.now());
 const findBarVisible = ref(false);
 const findQuery = ref('');
 const findResult = ref<BrowserFindInPageResult | null>(null);
+const pendingDeleteCurrentSession = ref(false);
+const deletingCurrentSession = ref(false);
 
 let resizeObserver: ResizeObserver | undefined;
 let downloadActivityTimer: number | undefined;
@@ -272,6 +274,53 @@ async function openSessionsFromPicker(site: Site, sessions: SiteSession[]) {
     browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
   } catch (error) {
     ElMessage.error(formatError(error));
+  }
+}
+
+async function copyCurrentSessionName() {
+  const sessionName = currentSessionName.value.trim();
+  if (!sessionName) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(sessionName);
+    ElMessage.success('已复制会话名称');
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+function requestDeleteCurrentSession() {
+  if (!browser.selectedSession || !browser.selectedSite || deletingCurrentSession.value) {
+    return;
+  }
+
+  pendingDeleteCurrentSession.value = true;
+}
+
+function cancelDeleteCurrentSession() {
+  pendingDeleteCurrentSession.value = false;
+}
+
+async function confirmDeleteCurrentSession() {
+  const session = browser.selectedSession;
+  if (!session || deletingCurrentSession.value) {
+    return;
+  }
+
+  try {
+    deletingCurrentSession.value = true;
+    // Same delete chain as site settings session delete:
+    // removes the session, closes only this session's tabs,
+    // and upper-level tabs collapse naturally when the last child closes.
+    await browser.deleteSession(session);
+    pendingDeleteCurrentSession.value = false;
+    browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  } finally {
+    deletingCurrentSession.value = false;
   }
 }
 
@@ -620,6 +669,20 @@ watch(
   },
 );
 
+watch(
+  () => [browser.selectedSessionId, browser.selectedSiteId, currentSessionName.value],
+  () => {
+    if (!deletingCurrentSession.value) {
+      pendingDeleteCurrentSession.value = false;
+    }
+  },
+);
+
+watch(pendingDeleteCurrentSession, async () => {
+  await nextTick();
+  browser.scheduleBrowserBounds(browserHost.value, browserInsetLeft.value, browserInsetRight.value);
+});
+
 </script>
 
 <template>
@@ -629,6 +692,7 @@ watch(
       :class="{
         'chrome-top--with-session-tabs': hasSessionTabs,
         'chrome-top--with-page-tabs': hasPageTabs,
+        'chrome-top--with-delete-confirm': pendingDeleteCurrentSession && currentSessionName,
       }"
     >
       <div class="chrome-tabs" aria-label="标签栏">
@@ -749,6 +813,7 @@ watch(
 
       <form
         class="chrome-toolbar"
+        :class="{ 'chrome-toolbar--with-session-delete': currentSessionName }"
         aria-label="浏览器工具栏"
         @submit.prevent="navigate"
       >
@@ -772,10 +837,17 @@ watch(
           <span class="address-box__status">
             {{ isHomeActive ? '起始页' : isDownloadsActive ? '下载' : isSettingsActive ? '设置' : browser.browserState.errorText ? '失败' : browser.browserState.isLoading ? '加载中' : '站点' }}
           </span>
-          <span v-if="currentSessionName" class="address-box__session" :title="currentSessionName">
+          <button
+            v-if="currentSessionName"
+            type="button"
+            class="address-box__session"
+            :title="`点击复制：${currentSessionName}`"
+            :aria-label="`复制会话名称 ${currentSessionName}`"
+            @click.stop.prevent="copyCurrentSessionName"
+          >
             <span class="address-box__session-dot" aria-hidden="true"></span>
             {{ currentSessionName }}
-          </span>
+          </button>
           <input
             :value="displayedAddress"
             type="text"
@@ -783,6 +855,23 @@ watch(
             placeholder="输入网址"
             @input="browser.address = ($event.target as HTMLInputElement).value"
           />
+        </div>
+
+        <div
+          v-if="currentSessionName"
+          class="chrome-toolbar-menu-wrap address-session-delete-wrap"
+        >
+          <button
+            type="button"
+            class="address-session-delete-button"
+            title="删除当前会话"
+            aria-label="删除当前会话"
+            :class="{ 'chrome-toolbar-button--active': pendingDeleteCurrentSession }"
+            :disabled="deletingCurrentSession"
+            @click.stop.prevent="requestDeleteCurrentSession"
+          >
+            <Delete theme="outline" size="18" />
+          </button>
         </div>
 
         <div class="chrome-toolbar-menu-wrap">
@@ -838,6 +927,32 @@ watch(
           </button>
         </div>
       </form>
+
+      <div
+        v-if="pendingDeleteCurrentSession && currentSessionName"
+        class="address-session-delete-bar"
+        role="dialog"
+        aria-label="确认删除会话"
+      >
+        <span>移除该会话。</span>
+        <div class="address-session-delete-bar__actions">
+          <ElButton
+            size="small"
+            type="danger"
+            :loading="deletingCurrentSession"
+            @click="confirmDeleteCurrentSession"
+          >
+            确认删除
+          </ElButton>
+          <ElButton
+            size="small"
+            :disabled="deletingCurrentSession"
+            @click="cancelDeleteCurrentSession"
+          >
+            取消
+          </ElButton>
+        </div>
+      </div>
 
       <form
         v-if="findBarVisible"
@@ -918,6 +1033,18 @@ watch(
   grid-template-rows: var(--titlebar-height) 34px 30px 48px;
 }
 
+.chrome-top--with-delete-confirm {
+  grid-template-rows: var(--titlebar-height) 48px 40px;
+}
+
+.chrome-top--with-session-tabs.chrome-top--with-delete-confirm {
+  grid-template-rows: var(--titlebar-height) 34px 48px 40px;
+}
+
+.chrome-top--with-session-tabs.chrome-top--with-page-tabs.chrome-top--with-delete-confirm {
+  grid-template-rows: var(--titlebar-height) 34px 30px 48px 40px;
+}
+
 .chrome-top {
   position: relative;
   z-index: 24;
@@ -926,6 +1053,10 @@ watch(
 
 .chrome-toolbar {
   grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
+}
+
+.chrome-toolbar--with-session-delete {
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) 32px repeat(3, 32px);
 }
 
 .chrome-tab--site-container {
@@ -946,19 +1077,88 @@ watch(
   grid-template-columns: auto auto minmax(0, 1fr);
 }
 
-.address-box__session {
+.chrome-toolbar .address-box__session {
   display: inline-flex;
+  width: auto;
+  min-width: 0;
+  max-width: 180px;
   height: 22px;
   align-items: center;
+  justify-content: flex-start;
   flex: 0 0 auto;
   gap: 5px;
+  border: 0;
   border-radius: 999px;
   padding: 0 8px;
   background: #ffffff;
   color: #1a73e8;
+  font: inherit;
   font-size: 12px;
   font-weight: 500;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.chrome-toolbar .address-box__session:hover {
+  background: #e8f0fe;
+  color: #1a73e8;
+}
+
+.chrome-toolbar .address-box__session:active {
+  background: #d2e3fc;
+  color: #1a73e8;
+}
+
+.chrome-toolbar .address-box__session:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 1px;
+}
+
+.address-session-delete-wrap {
+  position: relative;
+}
+
+.address-session-delete-button {
+  color: #5f6368;
+}
+
+.address-session-delete-button:hover:not(:disabled) {
+  color: #d93025;
+  background: rgba(217, 48, 37, 0.08);
+}
+
+.address-session-delete-button.chrome-toolbar-button--active {
+  color: #d93025;
+  background: rgba(217, 48, 37, 0.12);
+}
+
+.address-session-delete-bar {
+  display: flex;
+  min-width: 0;
+  height: 40px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  border-top: 1px solid rgba(255, 205, 205, 0.95);
+  padding: 0 12px;
+  background: #fff8f8;
+  color: #c5221f;
+  -webkit-app-region: no-drag;
+}
+
+.address-session-delete-bar span {
+  margin-right: auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.address-session-delete-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .address-box__session-dot {

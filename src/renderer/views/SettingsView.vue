@@ -216,6 +216,7 @@ function unsupportedUpdateText() {
   <main class="settings-page">
     <section class="settings-page__body">
       <aside class="settings-nav">
+        <div class="settings-nav__heading">设置</div>
         <button
           v-for="item in navItems"
           :key="item.pageId"
@@ -224,46 +225,59 @@ function unsupportedUpdateText() {
           type="button"
           @click="openInternalPage(item.pageId)"
         >
-          <component :is="item.icon" theme="outline" size="18" />
+          <span class="settings-nav__icon">
+            <component :is="item.icon" theme="outline" size="18" />
+          </span>
           <span>{{ item.label }}</span>
         </button>
       </aside>
 
       <section class="settings-content" aria-label="下载设置">
-        <h1>下载内容</h1>
+        <header class="settings-content__header">
+          <h1>下载内容</h1>
+        </header>
 
-        <div class="settings-row">
-          <div class="settings-row__text">
-            <strong>位置</strong>
-            <span>文件默认保存到此文件夹。</span>
+        <section class="settings-group" aria-label="下载内容">
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <strong>位置</strong>
+              <span>文件默认保存到此文件夹。</span>
+            </div>
+            <div class="settings-row__control settings-row__control--path">
+              <ElInput :model-value="settings?.downloadPath || ''" readonly />
+              <ElButton @click="selectDownloadPath">
+                <FolderOpen theme="outline" size="16" />
+                更改
+              </ElButton>
+            </div>
           </div>
-          <div class="settings-row__control settings-row__control--path">
-            <ElInput :model-value="settings?.downloadPath || ''" readonly />
-            <ElButton @click="selectDownloadPath">
-              <FolderOpen theme="outline" size="16" />
-              更改
-            </ElButton>
-          </div>
-        </div>
 
-        <div class="settings-row">
-          <div class="settings-row__text">
-            <strong>下载前询问每个文件的保存位置</strong>
-            <span>开启后，每次下载都会先显示保存位置选择。</span>
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <strong>下载前询问每个文件的保存位置</strong>
+              <span>开启后，每次下载都会先显示保存位置选择。</span>
+            </div>
+            <ElSwitch
+              :model-value="settings?.askWhereToSaveBeforeDownloading || false"
+              @update:model-value="updateAskBeforeDownload"
+            />
           </div>
-          <ElSwitch
-            :model-value="settings?.askWhereToSaveBeforeDownloading || false"
-            @update:model-value="updateAskBeforeDownload"
-          />
-        </div>
+        </section>
 
-        <section class="settings-section" aria-label="本机自动化桥">
-          <h2>本机自动化桥</h2>
+        <section class="settings-group settings-section" aria-label="本机自动化桥">
+          <header class="settings-section__header">
+            <h2>本机自动化桥</h2>
+          </header>
 
           <div class="settings-row">
             <div class="settings-row__text">
               <strong>启用</strong>
-              <span>{{ automationBridgeStatusText }}</span>
+              <span
+                class="settings-status"
+                :class="{ 'settings-status--running': automationBridge?.enabled && automationBridge?.running }"
+              >
+                {{ automationBridgeStatusText }}
+              </span>
             </div>
             <ElSwitch
               :model-value="automationBridge?.enabled || false"
@@ -322,8 +336,10 @@ function unsupportedUpdateText() {
           </div>
         </section>
 
-        <section class="settings-section" aria-label="更新">
-          <h2>更新</h2>
+        <section class="settings-group settings-section" aria-label="更新">
+          <header class="settings-section__header">
+            <h2>更新</h2>
+          </header>
 
           <div class="settings-row settings-row--top">
             <div class="settings-row__text">
@@ -415,21 +431,193 @@ function unsupportedUpdateText() {
 </template>
 
 <style scoped>
+.settings-page {
+  height: 100%;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
+}
+
+.settings-page__body {
+  display: grid;
+  height: 100%;
+  grid-template-columns: 232px minmax(0, 820px);
+  gap: 34px;
+  overflow: auto;
+  padding: 32px 36px 44px;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 32px;
+  display: grid;
+  align-content: start;
+  align-self: start;
+  gap: 6px;
+  padding: 14px 12px 12px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.settings-nav__heading {
+  padding: 0 10px 8px;
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.settings-nav__item {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: transparent;
+  color: #3c4043;
+  text-align: left;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.settings-nav__item:hover {
+  background: rgba(32, 33, 36, 0.05);
+}
+
+.settings-nav__item--active,
+.settings-nav__item--active:hover {
+  background: #dbe7fb;
+  color: #174ea6;
+}
+
+.settings-nav__item--active {
+  font-weight: 600;
+}
+
+.settings-nav__icon {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.settings-nav__item--active .settings-nav__icon {
+  background: rgba(23, 78, 166, 0.12);
+}
+
+.settings-nav__item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-content {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.settings-content__header {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+}
+
+.settings-content h1 {
+  margin: 0;
+  color: #202124;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.settings-group {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
 .settings-section {
   display: grid;
-  gap: 12px;
-  padding-top: 18px;
+  gap: 0;
+}
+
+.settings-section__header {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  border-bottom: 1px solid #edf0f2;
+  padding: 0 22px;
 }
 
 .settings-section h2 {
   margin: 0;
   color: #202124;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid #edf0f2;
+  padding: 18px 22px;
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
 }
 
 .settings-row--top {
   align-items: start;
+}
+
+.settings-row__text {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.settings-row__text strong {
+  color: #202124;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-row__text span {
+  min-width: 0;
+  color: #5f6368;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-row__control {
+  min-width: 0;
+}
+
+.settings-row__control--path {
+  display: grid;
+  width: min(460px, 100%);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
 }
 
 .settings-row__control--actions {
@@ -456,6 +644,26 @@ function unsupportedUpdateText() {
   width: 132px;
 }
 
+.settings-row__control--path :deep(.el-input__wrapper),
+.settings-row__control--port :deep(.el-input__wrapper) {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #dce3ea inset;
+}
+
+.settings-row__control--path :deep(.el-input__inner) {
+  font-size: 12px;
+}
+
+.settings-row :deep(.el-button) {
+  border-radius: 8px;
+}
+
+.settings-row :deep(.el-button > span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .settings-row__control--port :deep(.el-button),
 .settings-row--top > :deep(.el-button) {
   display: inline-flex;
@@ -463,8 +671,26 @@ function unsupportedUpdateText() {
   gap: 6px;
 }
 
+.settings-status {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #f1f3f4;
+  color: #5f6368;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-status--running {
+  background: #e6f4ea;
+  color: #137333;
+}
+
 .settings-row__mono {
-  max-width: min(520px, 48vw);
+  max-width: min(560px, 48vw);
   overflow-wrap: anywhere;
   color: #3c4043;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -472,11 +698,15 @@ function unsupportedUpdateText() {
 
 .update-panel {
   border-bottom: 1px solid #edf0f2;
-  padding: 0 0 16px;
+  padding: 16px 22px;
+}
+
+.update-panel:last-child {
+  border-bottom: 0;
 }
 
 .update-panel--release {
-  padding-top: 4px;
+  padding-top: 16px;
 }
 
 .update-details {
@@ -504,11 +734,24 @@ function unsupportedUpdateText() {
 
 .update-message {
   margin: 0;
+  padding: 0 22px 16px;
   color: #5f6368;
   font-size: 12px;
 }
 
 .update-message--error {
   color: #c5221f;
+}
+
+@media (max-width: 1120px) {
+  .settings-page__body {
+    grid-template-columns: 204px minmax(0, 1fr);
+    gap: 24px;
+    padding: 26px 28px 38px;
+  }
+
+  .settings-nav {
+    top: 26px;
+  }
 }
 </style>
