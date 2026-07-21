@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppApi, AppUpdateStatus, BrowserFindInPageResult, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
+import type { AppApi, AppUpdateStatus, BrowserFindInPageResult, BrowserNavigationResult, BrowserRect, BrowserState, BrowserTab, CookieGetDetails, CookieInfo, CookieRemoveDetails, CookieSetDetails, DownloadSettings, DownloadState, HistoryRecord, JarvisScript, JarvisScriptMessage, OpenSessionSyncDialogInput, Site, SiteExtension, StorageClearDataResult, StoragePartitionStats, WindowChromeInfo } from "../shared/types";
 
 const invoke = <T>(channel: string, ...args: unknown[]) =>
   ipcRenderer.invoke(channel, ...args) as Promise<T>;
@@ -71,6 +71,9 @@ const appApi: AppApi = {
   extensions: {
     listGlobal: () => invoke<SiteExtension[]>("extensions:list-global"),
     listSite: (siteId: string) => invoke<SiteExtension[]>("extensions:list-site", siteId),
+    listPinned: () => invoke<string[]>("extensions:list-pinned"),
+    setPinned: (extensionIds) => invoke<string[]>("extensions:set-pinned", extensionIds),
+    togglePinned: (extensionId) => invoke<string[]>("extensions:toggle-pinned", extensionId),
     installGlobal: () => invoke("extensions:install-global"),
     installSite: (siteId) => invoke("extensions:install-site", siteId),
     enableGlobal: (extensionId) => invoke("extensions:enable-global", extensionId),
@@ -83,8 +86,10 @@ const appApi: AppApi = {
     closePopup: () => invoke("extensions:close-popup"),
   },
   extensionPopup: {
+    cookiesGet: (details: CookieGetDetails) => invoke<CookieInfo[]>("extension-popup:cookies-get", details),
     cookiesSet: (details: CookieSetDetails) => invoke("extension-popup:cookies-set", details),
     cookiesRemove: (details: CookieRemoveDetails) => invoke("extension-popup:cookies-remove", details),
+    createTab: (input) => invoke<BrowserTab>("extension-popup:create-tab", input),
   },
   jarvisScripts: {
     listGlobal: () => invoke<JarvisScript[]>("jarvis-scripts:list-global"),
@@ -144,6 +149,7 @@ const appApi: AppApi = {
   onSiteMetadataUpdated: (callback) => on<[Site[]]>("site:metadata-updated", callback),
   onDownloadUpdated: (callback) => on<[DownloadState]>("download:updated", callback),
   onExtensionUpdated: (callback) => on<[string, SiteExtension[]]>("extension:updated", callback),
+  onPinnedExtensionsChanged: (callback) => on<[string[]]>("extension:pinned-changed", callback),
   onJarvisScriptUpdated: (callback) => on<[string | undefined, JarvisScript[]]>("jarvis-script:updated", callback),
   onJarvisScriptMessage: (callback) => on<[JarvisScriptMessage]>("jarvis-script:message", callback),
   onOpenSessionSyncDialog: (callback) => on<[OpenSessionSyncDialogInput]>("session-sync:open-dialog", callback),

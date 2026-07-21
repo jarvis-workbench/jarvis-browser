@@ -17,6 +17,9 @@ let unbindScriptUpdates: (() => void) | undefined;
 
 const selectedSite = computed(() => sites.value.find((site) => site.id === selectedSiteId.value) ?? null);
 const activeScripts = computed(() => selectedScope.value === 'global' ? globalScripts.value : siteScripts.value);
+const installedCount = computed(() => globalScripts.value.length + siteScripts.value.length);
+const enabledCount = computed(() => activeScripts.value.filter((script) => script.runtimeState.enabled).length);
+const runningCount = computed(() => activeScripts.value.filter((script) => isRunning(script)).length);
 const pageTitle = computed(() => selectedScope.value === 'global' ? '全局 jarvis-script' : `${siteTitle(selectedSite.value)} jarvis-script`);
 const pageHint = computed(() => selectedScope.value === 'global'
   ? '打开任意站点会话时可用'
@@ -197,6 +200,11 @@ function siteTitle(site?: Site | null) {
   }
 }
 
+function siteInitial(site?: Site | null) {
+  const title = siteTitle(site).trim();
+  return title ? title.slice(0, 1).toUpperCase() : '站';
+}
+
 function upsertScript(scripts: JarvisScript[], script: JarvisScript) {
   return scripts.some((item) => item.id === script.id)
     ? scripts.map((item) => (item.id === script.id ? script : item))
@@ -217,182 +225,361 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
 
 <template>
   <main class="script-page">
-    <aside class="script-sidebar" aria-label="jarvis-script 分组">
-      <button
-        type="button"
-        :class="{ 'script-sidebar__item--active': selectedScope === 'global' }"
-        class="script-sidebar__item"
-        @click="selectGlobal"
-      >
-        全局
-      </button>
-      <span class="script-sidebar__label">站点</span>
-      <button
-        v-for="site in sites"
-        :key="site.id"
-        type="button"
-        :class="{ 'script-sidebar__item--active': selectedScope === 'site' && selectedSiteId === site.id }"
-        class="script-sidebar__item"
-        @click="selectSite(site.id)"
-      >
-        {{ siteTitle(site) }}
-      </button>
-      <p v-if="!sites.length" class="drawer-empty">暂无站点</p>
-    </aside>
+    <section class="script-page__body">
+      <aside class="script-sidebar" aria-label="jarvis-script 分组">
+        <div class="script-sidebar__heading">jarvis-script</div>
+        <button
+          type="button"
+          :class="{ 'script-sidebar__item--active': selectedScope === 'global' }"
+          class="script-sidebar__item"
+          @click="selectGlobal"
+        >
+          <span class="script-sidebar__icon">
+            <Code theme="outline" size="14" />
+          </span>
+          <span class="script-sidebar__text">全局脚本</span>
+        </button>
 
-    <section class="script-panel">
-      <header class="script-panel__head script-panel__head--page">
-        <div>
-          <strong>jarvis-script</strong>
-          <span>{{ pageTitle }} · {{ pageHint }}</span>
+        <div class="script-sidebar__section">
+          <span class="script-sidebar__label">站点脚本</span>
+          <button
+            v-for="site in sites"
+            :key="site.id"
+            type="button"
+            :class="{ 'script-sidebar__item--active': selectedScope === 'site' && selectedSiteId === site.id }"
+            class="script-sidebar__item"
+            @click="selectSite(site.id)"
+          >
+            <span class="script-sidebar__icon script-sidebar__icon--site">
+              {{ siteInitial(site) }}
+            </span>
+            <span class="script-sidebar__text">{{ siteTitle(site) }}</span>
+          </button>
+          <p v-if="!sites.length" class="script-empty script-empty--compact">暂无站点</p>
         </div>
-        <div class="script-panel__head-actions">
+      </aside>
+
+      <section class="script-panel">
+        <header class="script-panel__head">
+          <div class="script-panel__titles">
+            <h1>jarvis-script</h1>
+            <p>{{ pageTitle }} · {{ pageHint }}</p>
+          </div>
           <ElButton :loading="loading" @click="loadPage">刷新</ElButton>
+        </header>
+
+        <div class="script-toolbar">
           <ElButton v-if="selectedScope === 'global'" type="primary" @click="installGlobalScript">
             <Code theme="outline" size="16" />
-            安装
+            安装全局脚本
           </ElButton>
           <ElButton v-else type="primary" :disabled="!selectedSiteId" @click="installSiteScript">
             <Code theme="outline" size="16" />
-            安装
+            安装到所选站点
           </ElButton>
         </div>
-      </header>
 
-      <article v-for="script in activeScripts" :key="script.id" class="script-card">
-        <div class="script-card__icon">
-          <Code theme="outline" size="18" />
+        <div class="script-summary" aria-label="jarvis-script 统计">
+          <span class="script-summary__item">
+            总计
+            <strong>{{ installedCount }}</strong>
+            个脚本
+          </span>
+          <span class="script-summary__item">
+            当前分组启用
+            <strong>{{ enabledCount }}</strong>
+            个
+          </span>
+          <span class="script-summary__item">
+            运行中
+            <strong>{{ runningCount }}</strong>
+            个
+          </span>
         </div>
-        <div class="script-card__main">
-          <strong>{{ script.name }}</strong>
-          <span>{{ scriptDetail(script) }}</span>
-          <p class="script-card__status">
-            <Play theme="outline" size="13" />
-            {{ scriptStatus(script) }}
+
+        <div class="script-list">
+          <article
+            v-for="script in activeScripts"
+            :key="script.id"
+            class="script-card"
+            :class="{ 'script-card--error': scriptError(script) }"
+          >
+            <div class="script-card__icon">
+              <Code theme="outline" size="18" />
+            </div>
+            <div class="script-card__main">
+              <strong>{{ script.name }}</strong>
+              <span>{{ scriptDetail(script) }}</span>
+              <p v-if="scriptError(script)" class="script-card__error">最近错误：{{ scriptError(script) }}</p>
+              <p v-else class="script-card__meta">
+                <span class="script-card__status">
+                  <Play theme="outline" size="12" />
+                  {{ scriptStatus(script) }}
+                </span>
+                <small>{{ selectedScope === 'global' ? '全局' : '站点' }}</small>
+                <small v-if="script.version">v{{ script.version }}</small>
+                <small v-if="script.manifest.monitors?.length">{{ script.manifest.monitors.length }} 个监听</small>
+              </p>
+            </div>
+            <div class="script-card__actions">
+              <ElSwitch :model-value="script.runtimeState.enabled" @change="toggleScript(script)" />
+              <button class="script-card__delete" type="button" title="卸载" @click="uninstallScript(script)">
+                <Delete theme="outline" size="16" />
+              </button>
+            </div>
+          </article>
+
+          <p v-if="!activeScripts.length" class="script-empty">
+            {{ selectedScope === 'global' ? '暂无全局 jarvis-script' : '所选站点暂无 jarvis-script' }}
           </p>
-          <p v-if="scriptError(script)" class="script-card__error">最近错误：{{ scriptError(script) }}</p>
         </div>
-        <div class="script-card__actions">
-          <ElSwitch :model-value="script.runtimeState.enabled" @change="toggleScript(script)" />
-          <button type="button" title="卸载" @click="uninstallScript(script)">
-            <Delete theme="outline" size="16" />
-          </button>
-        </div>
-      </article>
-
-      <p v-if="!activeScripts.length" class="drawer-empty">
-        {{ selectedScope === 'global' ? '暂无全局 jarvis-script' : '所选站点暂无 jarvis-script' }}
-      </p>
+      </section>
     </section>
   </main>
 </template>
 
 <style scoped>
 .script-page {
-  display: grid;
   height: 100%;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 24px;
-  overflow: hidden;
-  padding: 28px;
-  background: #f8fafc;
+  overflow: auto;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
 }
 
-.script-sidebar,
-.script-panel {
-  min-height: 0;
-  overflow: auto;
+.script-page__body {
+  display: grid;
+  width: min(1120px, 100%);
+  min-height: 100%;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 28px;
+  margin: 0 auto;
+  padding: 32px 36px 44px;
+  box-sizing: border-box;
 }
 
 .script-sidebar {
+  position: sticky;
+  top: 32px;
   display: grid;
   align-content: start;
-  gap: 6px;
-  border-right: 1px solid #e4e7eb;
-  padding-right: 16px;
+  align-self: start;
+  gap: 2px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  padding: 10px 8px 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.script-sidebar__heading {
+  padding: 0 8px 6px;
+  color: #80868b;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.script-sidebar__section {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #edf0f2;
 }
 
 .script-sidebar__label {
-  margin-top: 12px;
-  padding: 0 10px;
-  color: #5f6368;
-  font-size: 12px;
+  padding: 0 8px 4px;
+  color: #80868b;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .script-sidebar__item {
-  min-height: 34px;
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
   border: 0;
   border-radius: 6px;
-  padding: 0 10px;
+  padding: 0 8px;
   background: transparent;
-  color: #3c4043;
+  color: #5f6368;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
   text-align: left;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 
-.script-sidebar__item:hover,
-.script-sidebar__item--active {
+.script-sidebar__item:hover {
+  background: rgba(32, 33, 36, 0.05);
+  color: #3c4043;
+}
+
+.script-sidebar__item--active,
+.script-sidebar__item--active:hover {
   background: #e8f0fe;
   color: #174ea6;
+  font-weight: 500;
+}
+
+.script-sidebar__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.script-sidebar__icon--site {
+  background: #f1f3f4;
+  color: #80868b;
+}
+
+.script-sidebar__item--active .script-sidebar__icon {
+  background: rgba(23, 78, 166, 0.1);
+  color: #174ea6;
+}
+
+.script-sidebar__text {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: inherit;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .script-panel {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 16px;
+  min-width: 0;
 }
 
 .script-panel__head {
   display: flex;
+  min-height: 40px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid #edf0f2;
-  padding-bottom: 10px;
 }
 
-.script-panel__head div {
+.script-panel__titles {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.script-panel__head strong {
+.script-panel__titles h1 {
+  margin: 0;
   color: #202124;
-  font-size: 15px;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
-.script-panel__head span {
+.script-panel__titles p {
+  margin: 0;
   overflow: hidden;
   color: #5f6368;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.script-panel__head-actions {
+.script-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.script-toolbar :deep(.el-button) {
+  border-radius: 8px;
+}
+
+.script-toolbar :deep(.el-button > span) {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.script-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.script-summary__item {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e3e8ef;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #5f6368;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.script-summary__item strong {
+  color: #174ea6;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.script-list {
+  display: grid;
+  gap: 10px;
 }
 
 .script-card {
   display: grid;
   min-width: 0;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  border: 1px solid #dadce0;
+  gap: 14px;
+  border: 1px solid #e3e8ef;
   border-radius: 8px;
-  padding: 12px;
-  background: #ffffff;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.script-card:hover {
+  border-color: #d4dce7;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.script-card--error {
+  border-color: #f4c7c3;
+  background: #fff8f7;
 }
 
 .script-card__icon {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   border-radius: 8px;
   background: #f1f3f4;
   color: #3c4043;
@@ -401,12 +588,12 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
 .script-card__main {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 4px;
 }
 
 .script-card__main strong,
-.script-card__main span,
-.script-card__main p {
+.script-card__main > span,
+.script-card__meta {
   overflow: hidden;
   margin: 0;
   text-overflow: ellipsis;
@@ -416,10 +603,20 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
 .script-card__main strong {
   color: #202124;
   font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.script-card__main span,
-.script-card__main p {
+.script-card__main > span {
+  color: #5f6368;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.script-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #5f6368;
   font-size: 12px;
 }
@@ -430,8 +627,24 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
   gap: 4px;
 }
 
+.script-card__meta small {
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: #e8f0fe;
+  color: #174ea6;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .script-card__error {
+  margin: 0;
+  overflow: hidden;
   color: #c5221f;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .script-card__actions {
@@ -440,20 +653,56 @@ function patchSiteScripts(siteId: string, scripts: JarvisScript[]) {
   gap: 8px;
 }
 
-.script-card__actions button {
+.script-card__delete {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 50%;
+  border-radius: 8px;
   background: transparent;
   color: #5f6368;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 
-.script-card__actions button:hover {
-  background: #f1f3f4;
+.script-card__delete:hover {
+  background: #fce8e6;
   color: #d93025;
+}
+
+.script-empty {
+  margin: 0;
+  border: 1px dashed #d7dee8;
+  border-radius: 8px;
+  padding: 28px 18px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #5f6368;
+  font-size: 13px;
+  text-align: center;
+}
+
+.script-empty--compact {
+  padding: 12px 10px;
+  font-size: 12px;
+}
+
+.script-panel__head :deep(.el-button) {
+  border-radius: 8px;
+}
+
+@media (max-width: 1120px) {
+  .script-page__body {
+    width: min(100%, 1120px);
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: 20px;
+    padding: 26px 28px 38px;
+  }
+
+  .script-sidebar {
+    top: 26px;
+  }
 }
 </style>

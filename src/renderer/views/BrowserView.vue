@@ -24,7 +24,7 @@ import {
   ElMessage,
 } from 'element-plus';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { BrowserFindInPageResult, BrowserRect, Site, SiteSession } from '../../shared/types';
+import type { BrowserFindInPageResult, BrowserRect, Site, SiteExtension, SiteSession } from '../../shared/types';
 import BrowserDrawer from '../components/BrowserDrawer.vue';
 import SessionDrawer from '../components/SessionDrawer.vue';
 import {
@@ -399,6 +399,32 @@ function handleFindKeydown(event: KeyboardEvent) {
 
 async function openExtensionMenuOverlay(event: MouseEvent) {
   await window.appApi.overlays.openExtensionMenu({ anchor: elementAnchor(event.currentTarget) });
+}
+
+async function openPinnedExtensionPopup(extension: SiteExtension, event: MouseEvent) {
+  try {
+    await browser.openExtensionPopup(extension, elementAnchor(event.currentTarget));
+  } catch (error) {
+    ElMessage.error(formatError(error));
+  }
+}
+
+function extensionToolbarIcon(extension: SiteExtension) {
+  const icon = extension.action?.icon || extension.icon || '';
+  if (!icon) {
+    return '';
+  }
+  if (/^(data:|file:|jarvis-browser:|https?:)/i.test(icon)) {
+    return icon;
+  }
+  if (icon.startsWith('/')) {
+    return `file://${icon.split('/').map(encodeURIComponent).join('/')}`;
+  }
+  return icon;
+}
+
+function extensionToolbarLabel(extension: SiteExtension) {
+  return extension.action?.defaultTitle || extension.name;
 }
 
 async function openDownloadsBubbleOverlay(event: MouseEvent) {
@@ -874,9 +900,33 @@ watch(pendingDeleteCurrentSession, async () => {
           </button>
         </div>
 
-        <div class="chrome-toolbar-menu-wrap">
+        <div
+          class="chrome-extensions-cluster"
+          :class="{ 'chrome-extensions-cluster--empty-pins': !browser.pinnedExtensions.length }"
+        >
+          <button
+            v-for="extension in browser.pinnedExtensions"
+            :key="extension.id"
+            type="button"
+            class="chrome-extensions-cluster__button chrome-pinned-extension-button"
+            :title="extensionToolbarLabel(extension)"
+            :aria-label="extensionToolbarLabel(extension)"
+            @click="openPinnedExtensionPopup(extension, $event)"
+          >
+            <img
+              v-if="extensionToolbarIcon(extension)"
+              class="chrome-pinned-extension-button__icon"
+              :src="extensionToolbarIcon(extension)"
+              alt=""
+            />
+            <span v-else class="chrome-pinned-extension-button__fallback">
+              {{ extensionToolbarLabel(extension).trim().slice(0, 1).toUpperCase() }}
+            </span>
+          </button>
+
           <button
             type="button"
+            class="chrome-extensions-cluster__button chrome-extensions-menu-button"
             title="扩展程序"
             @click="openExtensionMenuOverlay"
           >
@@ -1052,11 +1102,101 @@ watch(pendingDeleteCurrentSession, async () => {
 }
 
 .chrome-toolbar {
-  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) repeat(3, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) auto repeat(2, 32px);
 }
 
 .chrome-toolbar--with-session-delete {
-  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) 32px repeat(3, 32px);
+  grid-template-columns: repeat(3, 32px) minmax(220px, 1fr) 32px auto repeat(2, 32px);
+}
+
+.chrome-extensions-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  max-width: 240px;
+  height: 32px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.chrome-extensions-cluster:hover {
+  border-color: rgba(60, 64, 67, 0.14);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.12);
+}
+
+.chrome-extensions-cluster__button,
+.chrome-toolbar .chrome-extensions-cluster__button {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #3c4043;
+  font-size: 0;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.chrome-extensions-cluster__button:hover,
+.chrome-toolbar .chrome-extensions-cluster__button:hover {
+  background: transparent;
+}
+
+.chrome-extensions-cluster__button:active,
+.chrome-toolbar .chrome-extensions-cluster__button:active {
+  background: transparent;
+}
+
+.chrome-pinned-extension-button__icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.chrome-pinned-extension-button__fallback {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: transparent;
+  color: #5f6368;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chrome-extensions-cluster__button > .i-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 0;
+}
+
+.chrome-extensions-cluster__button > .i-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .chrome-tab--site-container {
@@ -1539,6 +1679,34 @@ watch(pendingDeleteCurrentSession, async () => {
   display: inline-flex;
   width: 32px;
   height: 32px;
+  align-items: center;
+  justify-content: center;
   -webkit-app-region: no-drag;
+}
+
+.chrome-toolbar-menu-wrap > button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+.chrome-toolbar-menu-wrap > button > .i-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.chrome-toolbar-menu-wrap > button > .i-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 </style>

@@ -3,6 +3,7 @@ import { internalPageOrigin, overlayInternalPageId } from "./internal-protocol";
 
 export type BrowserOverlayAction =
   | "extension-popup"
+  | "extension-pin"
   | "extensions"
   | "install-site-extension"
   | "downloads"
@@ -14,6 +15,7 @@ export type BrowserOverlayAction =
 
 const browserOverlayActions = new Set<string>([
   "extension-popup",
+  "extension-pin",
   "extensions",
   "install-site-extension",
   "downloads",
@@ -31,6 +33,8 @@ export type BrowserOverlayMenuItem = {
   icon?: string;
   action: BrowserOverlayAction;
   disabled?: boolean;
+  pinned?: boolean;
+  pinAction?: boolean;
 };
 
 export type BrowserOverlayMenuModel = {
@@ -59,7 +63,9 @@ export function getToolOverlayHeight(model: BrowserOverlayMenuModel) {
 export function createExtensionMenuItems(input: {
   extensions: SiteExtension[];
   canInstallSiteExtension: boolean;
+  pinnedExtensionIds?: string[];
 }) {
+  const pinned = new Set(input.pinnedExtensionIds ?? []);
   return [
     ...input.extensions.map((extension) => ({
       id: extension.id,
@@ -67,6 +73,8 @@ export function createExtensionMenuItems(input: {
       detail: extension.name,
       icon: extension.action?.icon || extension.icon,
       action: "extension-popup" as const,
+      pinned: pinned.has(extension.id),
+      pinAction: true,
     })),
     {
       id: "extensions",

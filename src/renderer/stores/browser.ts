@@ -554,6 +554,9 @@ export const useBrowserStore = defineStore('browser', () => {
     const removeExtensionListener = window.appApi.onExtensionUpdated((siteId, nextExtensions) => {
       extensions.syncSiteExtensions(siteId, nextExtensions);
     });
+    const removePinnedExtensionListener = window.appApi.onPinnedExtensionsChanged((extensionIds) => {
+      extensions.setPinnedExtensionIds(extensionIds);
+    });
     const removeScriptUpdateListener = window.appApi.onJarvisScriptUpdated((siteId, nextScripts) => {
       scripts.syncScripts(siteId, nextScripts);
     });
@@ -580,8 +583,16 @@ export const useBrowserStore = defineStore('browser', () => {
       }
     });
     const removeTabsListener = window.appApi.onBrowserTabsChanged((state) => {
+      const previousSiteId = selectedSite.value?.id;
       tabs.syncTabs(state);
       syncActiveBrowserState();
+      const nextSiteId = selectedSite.value?.id;
+      if (nextSiteId && nextSiteId !== previousSiteId) {
+        void extensions.loadExtensions(nextSiteId);
+      } else if (!nextSiteId) {
+        extensions.clearSiteExtensions();
+        void extensions.loadPinnedExtensions();
+      }
     });
     const removeSessionSyncListener = window.appApi.onOpenSessionSyncDialog((input) => {
       void openSessionSyncDialog(input);
@@ -591,12 +602,14 @@ export const useBrowserStore = defineStore('browser', () => {
       statusMessage.value = updateStatusMessage(status);
     });
     void syncTabs();
+    void extensions.loadExtensions(selectedSite.value?.id);
 
     removeEventListeners = () => {
       removeBrowserListener();
       removeTabsListener();
       removeMetadataListener();
       removeExtensionListener();
+      removePinnedExtensionListener();
       removeScriptUpdateListener();
       removeScriptMessageListener();
       removeDownloadListener();
@@ -730,7 +743,9 @@ export const useBrowserStore = defineStore('browser', () => {
     activeSessionPageTabs: tabs.activeSessionPageTabs,
     globalExtensions: extensions.globalExtensions,
     siteExtensions: extensions.siteExtensions,
+    pinnedExtensionIds: extensions.pinnedExtensionIds,
     popupExtensions: extensions.popupExtensions,
+    pinnedExtensions: extensions.pinnedExtensions,
     globalScripts: scripts.globalScripts,
     siteScripts: scripts.siteScripts,
     browserState,
@@ -811,6 +826,8 @@ export const useBrowserStore = defineStore('browser', () => {
     toggleSiteExtension: extensions.toggleSiteExtension,
     uninstallGlobalExtension: extensions.uninstallGlobalExtension,
     uninstallSiteExtension: extensions.uninstallSiteExtension,
+    loadPinnedExtensions: extensions.loadPinnedExtensions,
+    togglePinnedExtension: extensions.togglePinnedExtension,
     openExtensionPopup,
     closeExtensionPopup,
     installGlobalScript: scripts.installGlobalScript,

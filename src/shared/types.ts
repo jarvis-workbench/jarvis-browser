@@ -26,6 +26,30 @@ export interface CookieRemoveDetails {
   sessionId?: string;
 }
 
+export interface CookieGetDetails {
+  url?: string;
+  name?: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  session?: boolean;
+  siteId?: string;
+  sessionId?: string;
+}
+
+export interface CookieInfo {
+  name: string;
+  value: string;
+  domain?: string;
+  hostOnly?: boolean;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  session?: boolean;
+  expirationDate?: number;
+  sameSite?: "unspecified" | "no_restriction" | "lax" | "strict";
+}
+
 export interface SiteSession {
   id: string;
   siteId?: string;
@@ -54,6 +78,8 @@ export interface SiteExtensionAction {
   defaultPopup: string;
   defaultTitle?: string;
   icon?: string;
+  popupWidth?: number;
+  popupHeight?: number;
 }
 
 export type JarvisScriptScope = "global" | "site";
@@ -617,6 +643,9 @@ export interface AppApi {
   extensions: {
     listGlobal(): Promise<SiteExtension[]>;
     listSite(siteId: string): Promise<SiteExtension[]>;
+    listPinned(): Promise<string[]>;
+    setPinned(extensionIds: string[]): Promise<string[]>;
+    togglePinned(extensionId: string): Promise<string[]>;
     installGlobal(): Promise<SiteExtension | undefined>;
     installSite(siteId: string): Promise<SiteExtension | undefined>;
     enableGlobal(extensionId: string): Promise<SiteExtension>;
@@ -629,8 +658,10 @@ export interface AppApi {
     closePopup(): Promise<void>;
   };
   extensionPopup: {
+    cookiesGet(details: CookieGetDetails): Promise<CookieInfo[]>;
     cookiesSet(details: CookieSetDetails): Promise<void>;
     cookiesRemove(details: CookieRemoveDetails): Promise<void>;
+    createTab(input: { url: string; openerTabId?: string; siteId?: string; sessionId?: string }): Promise<BrowserTab>;
   };
   jarvisScripts: {
     listGlobal(): Promise<JarvisScript[]>;
@@ -690,6 +721,7 @@ export interface AppApi {
   onSiteMetadataUpdated(callback: (sites: Site[]) => void): () => void;
   onDownloadUpdated(callback: (download: DownloadState) => void): () => void;
   onExtensionUpdated(callback: (siteId: string, extensions: SiteExtension[]) => void): () => void;
+  onPinnedExtensionsChanged(callback: (extensionIds: string[]) => void): () => void;
   onJarvisScriptUpdated(callback: (siteId: string | undefined, scripts: JarvisScript[]) => void): () => void;
   onJarvisScriptMessage(callback: (message: JarvisScriptMessage) => void): () => void;
   onOpenSessionSyncDialog(callback: (input: OpenSessionSyncDialogInput) => void): () => void;

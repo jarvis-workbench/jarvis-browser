@@ -19,7 +19,9 @@ import type {
   BrowserTab,
   BrowserTabKind,
   CookieRemoveDetails,
+  CookieGetDetails,
   CookieSetDetails,
+  CookieInfo,
   DownloadState,
 } from "../../shared/types";
 import { clampBrowserBounds, defaultBrowserBounds } from "../browser-bounds";
@@ -647,6 +649,7 @@ export class BrowserHost {
   async uninstallGlobalExtension(extensionId: string) {
     this.browserOverlayHost.closeOverlay();
     await this.extensionRuntime.uninstallGlobal(extensionId);
+    this.emitPinnedExtensionsChanged();
   }
 
   async enableSiteExtension(siteId: string, extensionId: string) {
@@ -661,6 +664,7 @@ export class BrowserHost {
   async uninstallSiteExtension(siteId: string, extensionId: string) {
     this.browserOverlayHost.closeOverlay();
     await this.extensionRuntime.uninstallSite(siteId, extensionId);
+    this.emitPinnedExtensionsChanged();
   }
 
   async openExtensionPopup(input: { siteId: string; sessionId: string; extensionId: string; anchor: BrowserRect }) {
@@ -687,8 +691,17 @@ export class BrowserHost {
     }
 
     const targetSession = getElectronSession(input.siteId, input.sessionId);
-    const loadedExtension = targetSession.getAllExtensions()
-      .find((item) => item.id === extension.id || item.path === extension.path);
+    let loadedExtension;
+    try {
+      loadedExtension = await this.extensionRuntime.ensureLoadedForSession(
+        input.siteId,
+        input.sessionId,
+        extension,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`扩展程序尚未加载到当前会话：${reason}`);
+    }
     if (!loadedExtension) {
       throw new Error("扩展程序尚未加载到当前会话");
     }
@@ -702,6 +715,7 @@ export class BrowserHost {
     const activeView = this.getActiveView();
     const popupUrl = new URL(defaultPopup, loadedExtension.url);
     popupUrl.searchParams.set("jarvisTabId", String(activeView.webContents.id));
+    popupUrl.searchParams.set("jarvisBrowserTabId", activeTab.id);
     popupUrl.searchParams.set("jarvisTabUrl", activeView.webContents.getURL());
     popupUrl.searchParams.set("jarvisSiteId", input.siteId);
     popupUrl.searchParams.set("jarvisSessionId", input.sessionId);
@@ -710,11 +724,16 @@ export class BrowserHost {
       popupUrl.searchParams.set("jarvisTabTitle", title);
     }
 
+    const popupSize = resolveExtensionPopupSize(extension);
     const { popupWindow } = this.browserOverlayHost.openOverlayWindow({
       key: popupKey,
       anchor: input.anchor,
-      width: 360,
-      height: 520,
+      width: popupSize.width,
+      height: popupSize.height,
+      // Extension popups paint edge-to-edge; do not reserve shadow gutter inside the page.
+      shadowInset: 0,
+      // Need keyboard focus for form fields inside extension popups.
+      focusable: true,
       webPreferences: {
         session: targetSession,
         preload: join(__dirname, "../../preload/extension-popup-preload.js"),
@@ -727,6 +746,10 @@ export class BrowserHost {
       this.browserOverlayHost.closeOverlay();
       throw error;
     });
+    if (!popupWindow.isDestroyed()) {
+      popupWindow.focus();
+      popupWindow.webContents.focus();
+    }
   }
 
   closeExtensionPopup() {
@@ -740,18 +763,40 @@ export class BrowserHost {
       ...this.store.listGlobalExtensions(),
       ...(site?.extensions ?? []),
     ].filter((extension) => extension.enabled && Boolean(extension.action?.defaultPopup));
+    const pinnedExtensionIds = this.store.listPinnedExtensionIds();
     await this.openToolMenuOverlay({
       key: "extension-menu",
       title: "扩展程序",
       subtitle: `${extensions.length} 个可操作扩展`,
       anchor: input.anchor,
-      width: 310,
+      width: 320,
       items: createExtensionMenuItems({
         extensions,
         canInstallSiteExtension: Boolean(site),
+        pinnedExtensionIds,
       }),
       emptyText: "当前没有可弹出的扩展",
     });
+  }
+
+  listPinnedExtensionIds() {
+    return this.store.listPinnedExtensionIds();
+  }
+
+  async setPinnedExtensionIds(extensionIds: string[]) {
+    const next = await this.store.setPinnedExtensionIds(extensionIds);
+    this.emitPinnedExtensionsChanged(next);
+    return next;
+  }
+
+  async togglePinnedExtension(extensionId: string) {
+    const next = await this.store.togglePinnedExtension(extensionId);
+    this.emitPinnedExtensionsChanged(next);
+    return next;
+  }
+
+  private emitPinnedExtensionsChanged(extensionIds = this.store.listPinnedExtensionIds()) {
+    this.sendToWebContents("extension:pinned-changed", extensionIds);
   }
 
   async openDownloadsBubble(input: { anchor: BrowserRect }) {
@@ -804,6 +849,31 @@ export class BrowserHost {
     });
   }
 
+  async getActiveSessionCookies(details: CookieGetDetails) {
+    const target = this.resolveCookieSessionTarget(details);
+    const targetSession = getElectronSession(target.siteId, target.sessionId);
+    const cookies = await targetSession.cookies.get({
+      url: details.url,
+      name: details.name,
+      domain: details.domain,
+      path: details.path,
+      secure: details.secure,
+      session: details.session,
+    });
+    return cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      hostOnly: cookie.hostOnly,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      session: cookie.session,
+      expirationDate: cookie.expirationDate,
+      sameSite: cookie.sameSite,
+    })) satisfies CookieInfo[];
+  }
+
   async setActiveSessionCookie(details: CookieSetDetails) {
     const target = this.resolveCookieSessionTarget(details);
     const targetSession = getElectronSession(target.siteId, target.sessionId);
@@ -814,6 +884,25 @@ export class BrowserHost {
     const target = this.resolveCookieSessionTarget(details);
     const targetSession = getElectronSession(target.siteId, target.sessionId);
     await targetSession.cookies.remove(details.url, details.name);
+  }
+
+  async createTabFromExtensionPopup(input: {
+    url: string;
+    openerTabId?: string;
+    siteId?: string;
+    sessionId?: string;
+  }) {
+    const openerTabId = input.openerTabId
+      || (input.siteId && input.sessionId
+        ? [...this.tabs.values()].find((tab) => tab.siteId === input.siteId && tab.sessionId === input.sessionId)?.id
+        : undefined)
+      || this.activeTabId;
+
+    this.browserOverlayHost.closeOverlay();
+    return this.createTab({
+      url: input.url,
+      openerTabId,
+    });
   }
 
   listGlobalJarvisScripts() {
@@ -2191,3 +2280,19 @@ function toElectronCookieSetDetails(details: CookieSetDetails): Electron.Cookies
     sameSite: details.sameSite,
   };
 }
+
+function resolveExtensionPopupSize(extension: { action?: { popupWidth?: number; popupHeight?: number } }) {
+  return {
+    width: clampPopupDimension(extension.action?.popupWidth, 360, 240, 720),
+    height: clampPopupDimension(extension.action?.popupHeight, 420, 160, 720),
+  };
+}
+
+function clampPopupDimension(value: unknown, fallback: number, min: number, max: number) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, Math.round(number)));
+}
+

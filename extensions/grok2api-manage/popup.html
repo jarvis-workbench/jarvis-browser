@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>grok2api-manage</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">G</div>
+          <div class="brand__copy">
+            <h1>grok2api-manage</h1>
+            <p id="context-label">当前会话</p>
+          </div>
+        </div>
+        <div class="segmented" role="tablist" aria-label="功能切换">
+          <button id="tab-sso" class="segmented__item is-active" type="button" role="tab" aria-selected="true">SSO</button>
+          <button id="tab-device-auth" class="segmented__item" type="button" role="tab" aria-selected="false">Device Auth</button>
+        </div>
+      </header>
+
+      <section id="panel-sso" class="panel is-active" role="tabpanel">
+        <div class="field">
+          <div class="field__head">
+            <label class="label" for="sso-value">SSO Cookie</label>
+            <span id="sso-badge" class="badge">未登录</span>
+          </div>
+          <textarea
+            id="sso-value"
+            class="textarea"
+            readonly
+            spellcheck="false"
+            placeholder="当前对话未登录"
+          ></textarea>
+        </div>
+        <div class="actions">
+          <button id="copy-sso" class="btn btn--ghost" type="button" disabled>复制</button>
+          <button id="export-sso" class="btn btn--primary" type="button" disabled>导出</button>
+        </div>
+      </section>
+
+      <section id="panel-device-auth" class="panel" role="tabpanel" hidden>
+        <div class="field">
+          <label class="label" for="device-code">设备码</label>
+          <input
+            id="device-code"
+            class="input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="例如 3C6F-MMSK"
+          >
+        </div>
+        <div class="actions actions--single">
+          <button id="start-auth" class="btn btn--primary" type="button" disabled>开始授权</button>
+        </div>
+        <p class="hint">会在当前对话会话中新建标签，并打开 xAI Device Auth 页面。</p>
+      </section>
+
+      <footer class="footer">
+        <p id="status" class="status" aria-live="polite"></p>
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

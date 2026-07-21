@@ -10,19 +10,56 @@ type BrowserExtensionsOptions = {
 export function useBrowserExtensions(options: BrowserExtensionsOptions) {
   const globalExtensions = ref<SiteExtension[]>([]);
   const siteExtensions = ref<SiteExtension[]>([]);
-  const popupExtensions = computed(() =>
-    [...globalExtensions.value, ...siteExtensions.value].filter((extension) =>
-      extension.enabled && Boolean(extension.action?.defaultPopup),
-    ),
-  );
+  const pinnedExtensionIds = ref<string[]>([]);
+  const availablePopupExtensions = computed(() => {
+    const siteScoped = siteExtensions.value.length
+      ? siteExtensions.value
+      : (options.selectedSite.value?.extensions ?? []);
+    const byId = new Map<string, SiteExtension>();
+    for (const extension of [...globalExtensions.value, ...siteScoped]) {
+      if (!extension.enabled || !extension.action?.defaultPopup) {
+        continue;
+      }
+      byId.set(extension.id, extension);
+    }
+    return [...byId.values()];
+  });
+  const popupExtensions = availablePopupExtensions;
+  const pinnedExtensions = computed(() => {
+    const byId = new Map(availablePopupExtensions.value.map((extension) => [extension.id, extension]));
+    return pinnedExtensionIds.value
+      .map((id) => byId.get(id))
+      .filter((extension): extension is SiteExtension => Boolean(extension));
+  });
 
-  async function loadExtensions(siteId: string) {
-    const [nextGlobalExtensions, nextSiteExtensions] = await Promise.all([
+  async function loadExtensions(siteId?: string) {
+    const tasks: Promise<unknown>[] = [
       window.appApi.extensions.listGlobal(),
-      window.appApi.extensions.listSite(siteId),
-    ]);
-    globalExtensions.value = nextGlobalExtensions;
-    siteExtensions.value = nextSiteExtensions;
+      window.appApi.extensions.listPinned(),
+    ];
+    if (siteId) {
+      tasks.push(window.appApi.extensions.listSite(siteId));
+    }
+
+    const [nextGlobalExtensions, nextPinnedExtensionIds, nextSiteExtensions] = await Promise.all(tasks);
+    globalExtensions.value = nextGlobalExtensions as SiteExtension[];
+    pinnedExtensionIds.value = nextPinnedExtensionIds as string[];
+    if (siteId) {
+      siteExtensions.value = nextSiteExtensions as SiteExtension[];
+    }
+  }
+
+  async function loadPinnedExtensions() {
+    pinnedExtensionIds.value = await window.appApi.extensions.listPinned();
+  }
+
+  async function togglePinnedExtension(extensionId: string) {
+    pinnedExtensionIds.value = await window.appApi.extensions.togglePinned(extensionId);
+    return pinnedExtensionIds.value;
+  }
+
+  function setPinnedExtensionIds(extensionIds: string[]) {
+    pinnedExtensionIds.value = [...extensionIds];
   }
 
   async function installGlobalExtension() {
@@ -106,8 +143,13 @@ export function useBrowserExtensions(options: BrowserExtensionsOptions) {
   return {
     globalExtensions,
     siteExtensions,
+    pinnedExtensionIds,
     popupExtensions,
+    pinnedExtensions,
     loadExtensions,
+    loadPinnedExtensions,
+    togglePinnedExtension,
+    setPinnedExtensionIds,
     installGlobalExtension,
     installSiteExtension,
     toggleGlobalExtension,

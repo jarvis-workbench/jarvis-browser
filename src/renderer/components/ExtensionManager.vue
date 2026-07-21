@@ -169,6 +169,11 @@ function siteTitle(site?: Site | null) {
   }
 }
 
+function siteInitial(site?: Site | null) {
+  const title = siteTitle(site).trim();
+  return title ? title.slice(0, 1).toUpperCase() : '站';
+}
+
 function upsertExtension(extensions: SiteExtension[], extension: SiteExtension) {
   return extensions.some((item) => item.id === extension.id)
     ? extensions.map((item) => (item.id === extension.id ? extension : item))
@@ -189,194 +194,313 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
 
 <template>
   <main class="extension-page">
-    <aside class="extension-sidebar" aria-label="扩展程序分组">
-      <button
-        type="button"
-        :class="{ 'extension-sidebar__item--active': selectedScope === 'global' }"
-        class="extension-sidebar__item"
-        @click="selectGlobal"
-      >
-        全局扩展
-      </button>
-      <span class="extension-sidebar__label">站点扩展</span>
-      <button
-        v-for="site in sites"
-        :key="site.id"
-        type="button"
-        :class="{ 'extension-sidebar__item--active': selectedScope === 'site' && selectedSiteId === site.id }"
-        class="extension-sidebar__item"
-        @click="selectSite(site.id)"
-      >
-        {{ siteTitle(site) }}
-      </button>
-      <p v-if="!sites.length" class="drawer-empty">暂无站点</p>
-    </aside>
+    <section class="extension-page__body">
+      <aside class="extension-sidebar" aria-label="扩展程序分组">
+        <div class="extension-sidebar__heading">扩展程序</div>
+        <button
+          type="button"
+          :class="{ 'extension-sidebar__item--active': selectedScope === 'global' }"
+          class="extension-sidebar__item"
+          @click="selectGlobal"
+        >
+          <span class="extension-sidebar__icon">
+            <Plug theme="outline" size="14" />
+          </span>
+          <span class="extension-sidebar__text">全局扩展</span>
+        </button>
 
-    <section class="extension-panel">
-      <header class="extension-panel__head extension-panel__head--page">
-        <div>
-          <strong>扩展程序管理</strong>
-          <span>{{ pageTitle }} · {{ pageHint }}</span>
+        <div class="extension-sidebar__section">
+          <span class="extension-sidebar__label">站点扩展</span>
+          <button
+            v-for="site in sites"
+            :key="site.id"
+            type="button"
+            :class="{ 'extension-sidebar__item--active': selectedScope === 'site' && selectedSiteId === site.id }"
+            class="extension-sidebar__item"
+            @click="selectSite(site.id)"
+          >
+            <span class="extension-sidebar__icon extension-sidebar__icon--site">
+              {{ siteInitial(site) }}
+            </span>
+            <span class="extension-sidebar__text">{{ siteTitle(site) }}</span>
+          </button>
+          <p v-if="!sites.length" class="extension-empty extension-empty--compact">暂无站点</p>
         </div>
-        <ElButton :loading="loading" @click="loadPage">刷新</ElButton>
-      </header>
+      </aside>
 
-      <label class="extension-search">
-        <Search theme="outline" size="18" />
-        <input v-model="searchText" type="search" placeholder="搜索扩展程序" />
-      </label>
+      <section class="extension-panel">
+        <header class="extension-panel__head">
+          <div class="extension-panel__titles">
+            <h1>扩展程序管理</h1>
+            <p>{{ pageTitle }} · {{ pageHint }}</p>
+          </div>
+          <ElButton :loading="loading" @click="loadPage">刷新</ElButton>
+        </header>
 
-      <div class="extension-install-grid">
-        <ElButton v-if="selectedScope === 'global'" type="primary" @click="installGlobalExtension">
-          <FolderOpen theme="outline" size="16" />
-          安装全局扩展程序
-        </ElButton>
-        <ElButton v-else type="primary" :disabled="!selectedSiteId" @click="installSiteExtension">
-          <FolderOpen theme="outline" size="16" />
-          安装到所选站点
-        </ElButton>
-      </div>
+        <div class="extension-toolbar">
+          <label class="extension-search">
+            <Search theme="outline" size="16" />
+            <input v-model="searchText" type="search" placeholder="搜索扩展程序" />
+          </label>
 
-      <div class="extension-summary">
-        <span>总计 <strong>{{ installedCount }}</strong> 个扩展程序</span>
-        <span>当前分组启用 <strong>{{ enabledCount }}</strong> 个</span>
-      </div>
-
-      <article
-        v-for="extension in filteredExtensions"
-        :key="extension.id"
-        class="extension-card"
-        :class="{ 'extension-card--error': extension.loadError }"
-      >
-        <div class="extension-card__icon">
-          <img v-if="extension.icon" :src="extension.icon" alt="" />
-          <Plug v-else theme="outline" size="18" />
+          <ElButton v-if="selectedScope === 'global'" type="primary" @click="installGlobalExtension">
+            <FolderOpen theme="outline" size="16" />
+            安装全局扩展程序
+          </ElButton>
+          <ElButton v-else type="primary" :disabled="!selectedSiteId" @click="installSiteExtension">
+            <FolderOpen theme="outline" size="16" />
+            安装到所选站点
+          </ElButton>
         </div>
-        <div class="extension-card__main">
-          <strong>{{ extension.name }}</strong>
-          <span>{{ extension.loadError || permissionText(extension) }}</span>
-          <p v-if="extension.loadError">{{ extension.loadError }}</p>
-          <p v-else>
-            <span>v{{ extension.version }}</span>
-            <small>{{ selectedScope === 'global' ? '全局' : '站点' }}</small>
-            <small v-if="extension.action?.defaultPopup">可弹出面板</small>
+
+        <div class="extension-summary" aria-label="扩展程序统计">
+          <span class="extension-summary__item">
+            总计
+            <strong>{{ installedCount }}</strong>
+            个扩展程序
+          </span>
+          <span class="extension-summary__item">
+            当前分组启用
+            <strong>{{ enabledCount }}</strong>
+            个
+          </span>
+          <span class="extension-summary__item">
+            当前显示
+            <strong>{{ filteredExtensions.length }}</strong>
+            个
+          </span>
+        </div>
+
+        <div class="extension-list">
+          <article
+            v-for="extension in filteredExtensions"
+            :key="extension.id"
+            class="extension-card"
+            :class="{ 'extension-card--error': extension.loadError }"
+          >
+            <div class="extension-card__icon">
+              <img v-if="extension.icon" :src="extension.icon" alt="" />
+              <Plug v-else theme="outline" size="18" />
+            </div>
+            <div class="extension-card__main">
+              <strong>{{ extension.name }}</strong>
+              <span>{{ extension.loadError || permissionText(extension) }}</span>
+              <p v-if="extension.loadError" class="extension-card__error">{{ extension.loadError }}</p>
+              <p v-else class="extension-card__meta">
+                <span>v{{ extension.version }}</span>
+                <small>{{ selectedScope === 'global' ? '全局' : '站点' }}</small>
+                <small v-if="extension.action?.defaultPopup">可弹出面板</small>
+              </p>
+            </div>
+            <div class="extension-card__actions">
+              <ElSwitch :model-value="extension.enabled" @change="toggleExtension(extension)" />
+              <button class="extension-card__delete" type="button" title="卸载" @click="uninstallExtension(extension)">
+                <Delete theme="outline" size="16" />
+              </button>
+            </div>
+          </article>
+
+          <p v-if="!filteredExtensions.length" class="extension-empty">
+            {{ activeExtensions.length ? '没有匹配的扩展程序' : '当前分组暂无扩展程序' }}
           </p>
         </div>
-        <div class="extension-card__actions">
-          <ElSwitch :model-value="extension.enabled" @change="toggleExtension(extension)" />
-          <button class="extension-card__delete" type="button" title="卸载" @click="uninstallExtension(extension)">
-            <Delete theme="outline" size="16" />
-          </button>
-        </div>
-      </article>
-
-      <p v-if="!filteredExtensions.length" class="drawer-empty">
-        {{ activeExtensions.length ? '没有匹配的扩展程序' : '当前分组暂无扩展程序' }}
-      </p>
+      </section>
     </section>
   </main>
 </template>
 
 <style scoped>
 .extension-page {
-  display: grid;
   height: 100%;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 24px;
-  overflow: hidden;
-  padding: 28px;
-  background: #f8fafc;
+  overflow: auto;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
 }
 
-.extension-sidebar,
-.extension-panel {
-  min-height: 0;
-  overflow: auto;
+.extension-page__body {
+  display: grid;
+  width: min(1120px, 100%);
+  min-height: 100%;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 28px;
+  margin: 0 auto;
+  padding: 32px 36px 44px;
+  box-sizing: border-box;
 }
 
 .extension-sidebar {
+  position: sticky;
+  top: 32px;
   display: grid;
   align-content: start;
-  gap: 6px;
-  border-right: 1px solid #e4e7eb;
-  padding-right: 16px;
+  align-self: start;
+  gap: 2px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  padding: 10px 8px 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.extension-sidebar__heading {
+  padding: 0 8px 6px;
+  color: #80868b;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.extension-sidebar__section {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #edf0f2;
 }
 
 .extension-sidebar__label {
-  margin-top: 12px;
-  padding: 0 10px;
-  color: #5f6368;
-  font-size: 12px;
+  padding: 0 8px 4px;
+  color: #80868b;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .extension-sidebar__item {
-  min-height: 34px;
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
   border: 0;
   border-radius: 6px;
-  padding: 0 10px;
+  padding: 0 8px;
   background: transparent;
-  color: #3c4043;
+  color: #5f6368;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
   text-align: left;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 
-.extension-sidebar__item:hover,
-.extension-sidebar__item--active {
+.extension-sidebar__item:hover {
+  background: rgba(32, 33, 36, 0.05);
+  color: #3c4043;
+}
+
+.extension-sidebar__item--active,
+.extension-sidebar__item--active:hover {
   background: #e8f0fe;
   color: #174ea6;
+  font-weight: 500;
+}
+
+.extension-sidebar__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.extension-sidebar__icon--site {
+  background: #f1f3f4;
+  color: #80868b;
+}
+
+.extension-sidebar__item--active .extension-sidebar__icon {
+  background: rgba(23, 78, 166, 0.1);
+  color: #174ea6;
+}
+
+.extension-sidebar__text {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: inherit;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .extension-panel {
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 16px;
+  min-width: 0;
 }
 
 .extension-panel__head {
   display: flex;
+  min-height: 40px;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid #edf0f2;
-  padding-bottom: 10px;
 }
 
-.extension-panel__head--page {
-  align-items: center;
-}
-
-.extension-panel__head div {
+.extension-panel__titles {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.extension-panel__head strong {
+.extension-panel__titles h1 {
+  margin: 0;
   color: #202124;
-  font-size: 15px;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
 }
 
-.extension-panel__head span {
+.extension-panel__titles p {
+  margin: 0;
   overflow: hidden;
   color: #5f6368;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.extension-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
 .extension-search {
   display: grid;
-  min-height: 38px;
-  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 40px;
+  min-width: 0;
+  flex: 1 1 280px;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  border: 1px solid #dadce0;
+  gap: 10px;
+  border: 1px solid #e3e8ef;
   border-radius: 8px;
-  padding: 0 12px;
-  background: #ffffff;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.92);
   color: #5f6368;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 
 .extension-search:focus-within {
   border-color: #8ab4f8;
+  box-shadow:
+    0 0 0 3px rgba(138, 180, 248, 0.22),
+    0 1px 2px rgba(15, 23, 42, 0.03);
 }
 
 .extension-search input {
@@ -388,27 +512,49 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
   font-size: 13px;
 }
 
-.extension-install-grid {
+.extension-search input::placeholder {
+  color: #80868b;
+}
+
+.extension-toolbar :deep(.el-button) {
+  border-radius: 8px;
+}
+
+.extension-toolbar :deep(.el-button > span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.extension-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
-.extension-summary {
-  display: flex;
-  min-height: 36px;
+.extension-summary__item {
+  display: inline-flex;
+  min-height: 34px;
   align-items: center;
-  gap: 14px;
-  border: 1px solid #e4e7eb;
-  border-radius: 8px;
+  gap: 6px;
+  border: 1px solid #e3e8ef;
+  border-radius: 999px;
   padding: 0 12px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.9);
   color: #5f6368;
   font-size: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 
-.extension-summary strong {
+.extension-summary__item strong {
   color: #174ea6;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.extension-list {
+  display: grid;
+  gap: 10px;
 }
 
 .extension-card {
@@ -416,11 +562,20 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
   min-width: 0;
   grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  border: 1px solid #dadce0;
+  gap: 14px;
+  border: 1px solid #e3e8ef;
   border-radius: 8px;
-  padding: 12px;
-  background: #ffffff;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.extension-card:hover {
+  border-color: #d4dce7;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
 }
 
 .extension-card--error {
@@ -430,8 +585,8 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
 
 .extension-card__icon {
   display: inline-flex;
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   align-items: center;
   justify-content: center;
   overflow: hidden;
@@ -443,17 +598,18 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
 .extension-card__icon img {
   width: 24px;
   height: 24px;
+  object-fit: contain;
 }
 
 .extension-card__main {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 4px;
 }
 
 .extension-card__main strong,
-.extension-card__main span,
-.extension-card__main p {
+.extension-card__main > span,
+.extension-card__meta {
   overflow: hidden;
   margin: 0;
   text-overflow: ellipsis;
@@ -463,26 +619,42 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
 .extension-card__main strong {
   color: #202124;
   font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.extension-card__main > span,
-.extension-card__main p {
+.extension-card__main > span {
+  color: #5f6368;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.extension-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #5f6368;
   font-size: 12px;
 }
 
-.extension-card__main p {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.extension-card__main small {
+.extension-card__meta small {
   border-radius: 999px;
-  padding: 1px 7px;
+  padding: 1px 8px;
   background: #e8f0fe;
   color: #174ea6;
   font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.extension-card__error {
+  margin: 0;
+  overflow: hidden;
+  color: #c5221f;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .extension-card__actions {
@@ -491,24 +663,56 @@ function patchSiteExtensions(siteId: string, extensions: SiteExtension[]) {
   gap: 8px;
 }
 
-.extension-card__actions button {
+.extension-card__delete {
   display: inline-flex;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 50%;
+  border-radius: 8px;
   background: transparent;
   color: #5f6368;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
 }
 
-.extension-card__actions button:hover {
-  background: #f1f3f4;
-  color: #202124;
-}
-
-.extension-card__actions .extension-card__delete:hover {
+.extension-card__delete:hover {
+  background: #fce8e6;
   color: #d93025;
+}
+
+.extension-empty {
+  margin: 0;
+  border: 1px dashed #d7dee8;
+  border-radius: 8px;
+  padding: 28px 18px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #5f6368;
+  font-size: 13px;
+  text-align: center;
+}
+
+.extension-empty--compact {
+  padding: 12px 10px;
+  font-size: 12px;
+}
+
+.extension-panel__head :deep(.el-button) {
+  border-radius: 8px;
+}
+
+@media (max-width: 1120px) {
+  .extension-page__body {
+    width: min(100%, 1120px);
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: 20px;
+    padding: 26px 28px 38px;
+  }
+
+  .extension-sidebar {
+    top: 26px;
+  }
 }
 </style>

@@ -6,7 +6,9 @@
   "default_locale": "en",
   "action": {
     "default_title": "__MSG_extName__",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_popup_width": 520,
+    "default_popup_height": 360
   },
   "permissions": [
     "activeTab",
@@ -36,5 +38,11 @@
         "https://web.telegram.org/*"
       ]
     }
-  ]
+  ],
+  "jarvis": {
+    "popup": {
+      "width": 520,
+      "height": 360
+    }
+  }
 }

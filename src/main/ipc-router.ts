@@ -3,6 +3,7 @@ import type {
   AppApi,
   AutomationBridgeSettings,
   BrowserRect,
+  CookieGetDetails,
   CookieRemoveDetails,
   CookieSetDetails,
 } from "../shared/types";
@@ -177,6 +178,13 @@ export class IpcRouter {
       }
       return site.extensions;
     });
+    this.route("extensions:list-pinned", () => this.browserHost.listPinnedExtensionIds());
+    this.route("extensions:set-pinned", (_event, extensionIds: string[]) =>
+      this.browserHost.setPinnedExtensionIds(extensionIds),
+    );
+    this.route("extensions:toggle-pinned", (_event, extensionId: string) =>
+      this.browserHost.togglePinnedExtension(extensionId),
+    );
     this.route("extensions:install-global", () => this.browserHost.installGlobalUnpacked());
     this.route("extensions:install-site", (_event, siteId: string) => this.browserHost.installSiteUnpacked(siteId));
     this.route("extensions:enable-global", (_event, extensionId: string) =>
@@ -203,11 +211,19 @@ export class IpcRouter {
         this.browserHost.openExtensionPopup(input),
     );
     this.route("extensions:close-popup", () => this.browserHost.closeExtensionPopup());
+    this.route("extension-popup:cookies-get", (_event, details: CookieGetDetails) =>
+      this.browserHost.getActiveSessionCookies(details),
+    );
     this.route("extension-popup:cookies-set", (_event, details: CookieSetDetails) =>
       this.browserHost.setActiveSessionCookie(details),
     );
     this.route("extension-popup:cookies-remove", (_event, details: CookieRemoveDetails) =>
       this.browserHost.removeActiveSessionCookie(details),
+    );
+    this.route(
+      "extension-popup:create-tab",
+      (_event, input: Parameters<AppApi["extensionPopup"]["createTab"]>[0]) =>
+        this.browserHost.createTabFromExtensionPopup(input),
     );
 
     // Jarvis Scripts
@@ -344,6 +360,13 @@ export class IpcRouter {
           extensionId: input.id,
           anchor: input.anchor,
         });
+        break;
+      }
+      case "extension-pin": {
+        await this.browserHost.togglePinnedExtension(input.id);
+        if (input.anchor) {
+          await this.browserHost.openExtensionMenu({ anchor: input.anchor });
+        }
         break;
       }
       case "extensions":

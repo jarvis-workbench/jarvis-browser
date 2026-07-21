@@ -16,6 +16,7 @@ type ProfileFile = {
   createdAt: string;
   downloadSettings?: Partial<DownloadSettings>;
   automationBridge?: Partial<AutomationBridgeSettings>;
+  pinnedExtensionIds?: string[];
 };
 
 const now = () => new Date().toISOString();
@@ -48,6 +49,7 @@ export class MetadataStore {
   private globalExtensions: SiteExtension[] = [];
   private globalJarvisScripts: JarvisScript[] = [];
   private downloads: DownloadState[] = [];
+  private pinnedExtensionIds: string[] = [];
   private profile: ProfileFile = createDefaultProfile();
   private downloadSettings: DownloadSettings = createDefaultDownloadSettings();
   private automationBridgeSettings: AutomationBridgeSettings = createDefaultAutomationBridgeSettings();
@@ -63,6 +65,7 @@ export class MetadataStore {
     this.profile = await readJson<ProfileFile>(dataPaths.profileFile, createDefaultProfile());
     this.downloadSettings = normalizeDownloadSettings(this.profile.downloadSettings);
     this.automationBridgeSettings = normalizeAutomationBridgeSettings(this.profile.automationBridge);
+    this.pinnedExtensionIds = normalizePinnedExtensionIds(this.profile.pinnedExtensionIds);
     this.globalExtensions = await hydrateExtensionsMetadata(
       await readJson<SiteExtension[]>(dataPaths.global.extensionsIndexFile, []),
     );
@@ -136,6 +139,32 @@ export class MetadataStore {
 
   listGlobalExtensions() {
     return structuredClone(this.globalExtensions);
+  }
+
+  listPinnedExtensionIds() {
+    return [...this.pinnedExtensionIds];
+  }
+
+  async setPinnedExtensionIds(extensionIds: string[]) {
+    this.pinnedExtensionIds = normalizePinnedExtensionIds(extensionIds);
+    this.profile = {
+      ...this.profile,
+      pinnedExtensionIds: this.pinnedExtensionIds,
+    };
+    await this.persistProfile();
+    return this.listPinnedExtensionIds();
+  }
+
+  async togglePinnedExtension(extensionId: string) {
+    const id = extensionId.trim();
+    if (!id) {
+      throw new Error("扩展程序不存在");
+    }
+
+    const next = this.pinnedExtensionIds.includes(id)
+      ? this.pinnedExtensionIds.filter((item) => item !== id)
+      : [...this.pinnedExtensionIds, id];
+    return this.setPinnedExtensionIds(next);
   }
 
   listGlobalJarvisScripts() {
@@ -461,6 +490,7 @@ export class MetadataStore {
 
     site.extensions = nextExtensions;
     site.updatedAt = now();
+    await this.removePinnedExtensionId(extensionId);
     await this.enqueue(async () => {
       await rm(dataPaths.sites.extensionInstallDir(siteId, extensionId), { recursive: true, force: true });
       await this.writeSite(site);
@@ -476,6 +506,7 @@ export class MetadataStore {
     }
 
     this.globalExtensions = nextExtensions;
+    await this.removePinnedExtensionId(extensionId);
     await this.enqueue(async () => {
       await rm(dataPaths.global.extensionInstallDir(extensionId), { recursive: true, force: true });
       await this.writeGlobalExtensionsIndex();
@@ -695,6 +726,19 @@ export class MetadataStore {
     });
   }
 
+  private async removePinnedExtensionId(extensionId: string) {
+    if (!this.pinnedExtensionIds.includes(extensionId)) {
+      return;
+    }
+
+    this.pinnedExtensionIds = this.pinnedExtensionIds.filter((item) => item !== extensionId);
+    this.profile = {
+      ...this.profile,
+      pinnedExtensionIds: this.pinnedExtensionIds,
+    };
+    await this.persistProfile();
+  }
+
   private async persistProfile() {
     await this.enqueue(async () => {
       await writeJson(dataPaths.profileFile, this.profile);
@@ -836,7 +880,26 @@ function createDefaultProfile(): ProfileFile {
     createdAt: now(),
     downloadSettings: createDefaultDownloadSettings(),
     automationBridge: createDefaultAutomationBridgeSettings(),
+    pinnedExtensionIds: [],
   };
+}
+
+function normalizePinnedExtensionIds(input?: string[] | null) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const value of input) {
+    const id = typeof value === "string" ? value.trim() : "";
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
 }
 
 function createDefaultDownloadSettings(): DownloadSettings {
@@ -908,19 +971,25 @@ function normalizeDownloadState(input: Partial<DownloadState>): DownloadState {
 }
 
 async function hydrateExtensionsMetadata(extensions: SiteExtension[]) {
-  return Promise.all(extensions.map(async (extension) => {
-    if (extension.action?.defaultPopup) {
-      return extension;
-    }
-
+  return Promise.all(extensions.map(async (extension): Promise<SiteExtension> => {
     try {
       const metadata = await readExtensionManifestMetadata(extension.path);
+      const sourceAction = extension.action ?? metadata.action;
+      const action = sourceAction?.defaultPopup
+        ? {
+          defaultPopup: sourceAction.defaultPopup,
+          defaultTitle: extension.action?.defaultTitle ?? metadata.action?.defaultTitle ?? sourceAction.defaultTitle,
+          icon: extension.action?.icon ?? metadata.action?.icon ?? sourceAction.icon,
+          popupWidth: extension.action?.popupWidth ?? metadata.action?.popupWidth,
+          popupHeight: extension.action?.popupHeight ?? metadata.action?.popupHeight,
+        }
+        : undefined;
       return {
         ...extension,
         name: extension.name || metadata.name,
         version: extension.version || metadata.version,
         permissions: extension.permissions?.length ? extension.permissions : metadata.permissions,
-        action: extension.action ?? metadata.action,
+        action,
         icon: extension.icon ?? metadata.icon,
       };
     } catch {

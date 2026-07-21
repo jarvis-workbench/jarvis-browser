@@ -10,12 +10,22 @@ type ExtensionManifest = {
   icons?: Record<string, string>;
   action?: ExtensionActionManifest;
   browser_action?: ExtensionActionManifest;
+  jarvis?: {
+    popup?: {
+      width?: number;
+      height?: number;
+    };
+  };
 };
 
 type ExtensionActionManifest = {
   default_popup?: string;
   default_title?: string;
   default_icon?: string | Record<string, string>;
+  default_popup_width?: number;
+  default_popup_height?: number;
+  popup_width?: number;
+  popup_height?: number;
 };
 
 export async function createExtensionFromPath(extensionPath: string): Promise<SiteExtension> {
@@ -66,11 +76,43 @@ function resolveExtensionAction(extensionPath: string, manifest: ExtensionManife
     return undefined;
   }
 
+  const popupSize = resolvePopupSize(manifest, action);
   return {
     defaultPopup,
     defaultTitle: action?.default_title || manifest.name,
     icon: resolveIconPath(extensionPath, action?.default_icon),
+    popupWidth: popupSize.width,
+    popupHeight: popupSize.height,
   };
+}
+
+function resolvePopupSize(
+  manifest: ExtensionManifest,
+  action?: ExtensionActionManifest,
+) {
+  const width = firstPositiveNumber(
+    action?.default_popup_width,
+    action?.popup_width,
+    manifest.jarvis?.popup?.width,
+  );
+  const height = firstPositiveNumber(
+    action?.default_popup_height,
+    action?.popup_height,
+    manifest.jarvis?.popup?.height,
+  );
+  return {
+    width,
+    height,
+  };
+}
+
+function firstPositiveNumber(...values: Array<number | undefined>) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.round(value);
+    }
+  }
+  return undefined;
 }
 
 function resolveIconPath(extensionPath: string, icon?: string | Record<string, string>) {

@@ -5,7 +5,9 @@
   "version": "0.1.0",
   "action": {
     "default_title": "Chrome Sync",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_popup_width": 320,
+    "default_popup_height": 260
   },
   "background": {
     "service_worker": "background.js"
@@ -34,5 +36,11 @@
       "run_at": "document_idle",
       "all_frames": true
     }
-  ]
+  ],
+  "jarvis": {
+    "popup": {
+      "width": 320,
+      "height": 260
+    }
+  }
 }

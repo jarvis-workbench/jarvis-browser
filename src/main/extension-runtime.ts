@@ -214,16 +214,46 @@ export class ExtensionRuntime {
     return loaded;
   }
 
+  async ensureLoadedForSession(siteId: string, sessionId: string, extension: SiteExtension) {
+    const electronSession = getElectronSession(siteId, sessionId);
+    this.bindSessionDownloads(`${siteId}:${sessionId}`, electronSession);
+    const existing = findLoadedExtension(electronSession, extension);
+    if (existing) {
+      return existing;
+    }
+    return this.loadExtension(electronSession, extension);
+  }
+
   private async loadExtension(targetSession: Electron.Session, extension: SiteExtension) {
     const loadPath = await prepareElectronExtensionLoadPath(extension);
-    return targetSession.extensions.loadExtension(loadPath, { allowFileAccess: true });
+    const existing = findLoadedExtension(targetSession, extension, loadPath);
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      return await targetSession.extensions.loadExtension(loadPath, { allowFileAccess: true });
+    } catch (error) {
+      const loaded = findLoadedExtension(targetSession, extension, loadPath);
+      if (loaded) {
+        return loaded;
+      }
+      throw error;
+    }
   }
 
   private async removeFromSite(site: Site, extensionId: string) {
     for (const siteSession of site.sessions) {
       try {
         const electronSession = getElectronSession(site.id, siteSession.id);
-        electronSession.removeExtension(extensionId);
+        const extensionsApi = electronSession.extensions as Electron.Session["extensions"] & {
+          removeExtension?: (id: string) => void;
+        };
+        if (typeof extensionsApi?.removeExtension === "function") {
+          extensionsApi.removeExtension(extensionId);
+        } else {
+          (electronSession as Electron.Session & { removeExtension?: (id: string) => void }).removeExtension?.(extensionId);
+        }
       } catch {
         // 扩展程序不一定已加载到每个 session。
       }
@@ -288,4 +318,63 @@ async function prepareElectronExtensionLoadPath(extension: SiteExtension) {
     extensionLoadPromises.delete(extension.id);
     throw error;
   }
+}
+
+
+function listSessionExtensions(targetSession: Electron.Session) {
+  const extensionsApi = targetSession.extensions as Electron.Session["extensions"] & {
+    getAllExtensions?: () => Electron.Extension[];
+  };
+  if (typeof extensionsApi?.getAllExtensions === "function") {
+    return extensionsApi.getAllExtensions();
+  }
+
+  const legacySession = targetSession as Electron.Session & {
+    getAllExtensions?: () => Electron.Extension[];
+  };
+  if (typeof legacySession.getAllExtensions === "function") {
+    return legacySession.getAllExtensions();
+  }
+
+  return [];
+}
+
+export function findLoadedExtension(
+  targetSession: Electron.Session,
+  extension: SiteExtension,
+  loadPath?: string,
+) {
+  const loaded = listSessionExtensions(targetSession);
+  const candidates = [extension.path, loadPath].filter((value): value is string => Boolean(value));
+  return loaded.find((item) => {
+    if (item.id === extension.id) {
+      return true;
+    }
+    if (candidates.some((candidate) => item.path === candidate)) {
+      return true;
+    }
+    if (extension.path && item.path && pathsLooselyMatch(extension.path, item.path)) {
+      return true;
+    }
+    if (loadPath && item.path && pathsLooselyMatch(loadPath, item.path)) {
+      return true;
+    }
+    // Fallback for remapped load directories: same extension name + version.
+    if (item.name && extension.name && item.name === extension.name) {
+      if (!item.version || !extension.version || item.version === extension.version) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+function pathsLooselyMatch(left: string, right: string) {
+  if (left === right) {
+    return true;
+  }
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const a = normalize(left);
+  const b = normalize(right);
+  return a === b || a.endsWith(b) || b.endsWith(a);
 }

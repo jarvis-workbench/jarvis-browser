@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "grok2api-manage",
+  "description": "Manage Grok SSO cookies and Device Auth for grok.com sessions.",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "grok2api-manage",
+    "default_popup": "popup.html",
+    "default_popup_width": 360,
+    "default_popup_height": 400
+  },
+  "permissions": [
+    "activeTab",
+    "cookies",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://grok.com/*",
+    "https://*.grok.com/*",
+    "https://accounts.x.ai/*",
+    "https://*.x.ai/*"
+  ],
+  "jarvis": {
+    "popup": {
+      "width": 360,
+      "height": 400
+    }
+  }
+}

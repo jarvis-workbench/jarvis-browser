@@ -24,12 +24,14 @@ export class BrowserOverlayHost {
     anchorRightOffset: number;
     width: number;
     height: number;
+    shadowInset: number;
+    focusable: boolean;
   };
 
   constructor(private readonly parentWindow: BrowserWindow) {
     parentWindow.on("move", () => this.repositionActivePopup());
     parentWindow.on("resize", () => this.repositionActivePopup());
-    parentWindow.on("blur", () => this.closeOverlay());
+    parentWindow.on("blur", () => this.handleParentBlur());
     parentWindow.on("minimize", () => this.closeOverlay());
     parentWindow.on("hide", () => this.closeOverlay());
     parentWindow.on("closed", () => this.closeOverlay());
@@ -90,6 +92,21 @@ export class BrowserOverlayHost {
     return this.activePopup?.key === key && Boolean(this.popupWindow && !this.popupWindow.isDestroyed());
   }
 
+  resizeActiveOverlay(key: string, input: { width: number; height: number; anchor?: BrowserRect }) {
+    if (!this.isActive(key) || !this.popupWindow || this.popupWindow.isDestroyed() || !this.activePopup) {
+      return false;
+    }
+
+    const anchor = input.anchor ?? this.resolveActiveAnchor(this.activePopup);
+    const width = Math.max(1, Math.round(input.width));
+    const height = Math.max(1, Math.round(input.height));
+    const shadowInset = this.activePopup.shadowInset;
+    const focusable = this.activePopup.focusable;
+    this.activePopup = this.createActivePopup(key, anchor, width, height, shadowInset, focusable);
+    this.popupWindow.setBounds(this.resolveOverlayBounds(anchor, width, height, shadowInset));
+    return true;
+  }
+
   dismissFromMainWindowMouse(mouse: Electron.MouseInputEvent) {
     if (mouse.type !== "mouseDown" || !this.hasOpenOverlay()) {
       return;
@@ -126,6 +143,7 @@ export class BrowserOverlayHost {
       this.resolveActiveAnchor(this.activePopup),
       this.activePopup.width,
       this.activePopup.height,
+      this.activePopup.shadowInset,
     ));
   }
 
@@ -134,21 +152,28 @@ export class BrowserOverlayHost {
     anchor: BrowserRect;
     width: number;
     height: number;
+    shadowInset?: number;
+    focusable?: boolean;
     webPreferences: Electron.BrowserWindowConstructorOptions["webPreferences"];
   }): { popupWindow: BrowserWindow; reused: boolean } {
     validateAnchor(input.anchor);
+    const shadowInset = input.shadowInset === undefined ? overlayShadowInset : Math.max(0, Math.round(input.shadowInset));
+    const focusable = Boolean(input.focusable);
     if (this.activePopup?.key === input.key && this.popupWindow && !this.popupWindow.isDestroyed()) {
       const existingWindow = this.popupWindow;
-      const nextPopup = this.createActivePopup(input.key, input.anchor, input.width, input.height);
-      existingWindow.setBounds(this.resolveOverlayBounds(input.anchor, input.width, input.height));
+      const nextPopup = this.createActivePopup(input.key, input.anchor, input.width, input.height, shadowInset, focusable);
+      existingWindow.setBounds(this.resolveOverlayBounds(input.anchor, input.width, input.height, shadowInset));
       this.activePopup = {
         ...nextPopup,
       };
+      if (focusable && !existingWindow.isDestroyed()) {
+        existingWindow.focus();
+      }
       return { popupWindow: existingWindow, reused: true };
     }
 
     this.closeOverlay();
-    const bounds = this.resolveOverlayBounds(input.anchor, input.width, input.height);
+    const bounds = this.resolveOverlayBounds(input.anchor, input.width, input.height, shadowInset);
     const popupWindow = new BrowserWindow({
       parent: this.parentWindow,
       modal: false,
@@ -158,7 +183,7 @@ export class BrowserOverlayHost {
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
-      focusable: false,
+      focusable,
       skipTaskbar: true,
       transparent: true,
       hasShadow: false,
@@ -171,12 +196,33 @@ export class BrowserOverlayHost {
     });
 
     this.popupWindow = popupWindow;
-    this.activePopup = this.createActivePopup(input.key, input.anchor, input.width, input.height);
+    this.activePopup = this.createActivePopup(input.key, input.anchor, input.width, input.height, shadowInset, focusable);
     registerInternalProtocolForSession(popupWindow.webContents.session);
+
+    if (focusable) {
+      popupWindow.on("blur", () => {
+        // Close only when focus leaves both parent and popup.
+        setTimeout(() => {
+          if (!this.popupWindow || this.popupWindow.isDestroyed() || this.popupWindow !== popupWindow) {
+            return;
+          }
+          if (popupWindow.isFocused() || popupWindow.webContents.isFocused() || this.parentWindow.isFocused()) {
+            return;
+          }
+          this.closeOverlay();
+        }, 0);
+      });
+    }
 
     popupWindow.setMenuBarVisibility(false);
     popupWindow.once("ready-to-show", () => {
-      if (!popupWindow.isDestroyed()) {
+      if (popupWindow.isDestroyed()) {
+        return;
+      }
+      if (focusable) {
+        popupWindow.show();
+        popupWindow.focus();
+      } else {
         popupWindow.showInactive();
       }
     });
@@ -190,7 +236,14 @@ export class BrowserOverlayHost {
     return { popupWindow, reused: false };
   }
 
-  private createActivePopup(key: string, anchor: BrowserRect, width: number, height: number) {
+  private createActivePopup(
+    key: string,
+    anchor: BrowserRect,
+    width: number,
+    height: number,
+    shadowInset = overlayShadowInset,
+    focusable = false,
+  ) {
     const contentBounds = this.parentWindow.getContentBounds();
     return {
       key,
@@ -199,7 +252,34 @@ export class BrowserOverlayHost {
       anchorRightOffset: Math.max(0, contentBounds.width - anchor.x - anchor.width),
       width,
       height,
+      shadowInset,
+      focusable,
     };
+  }
+
+  private handleParentBlur() {
+    // Focusable extension popups intentionally take focus for text input.
+    // Closing on parent blur would immediately dismiss them.
+    if (this.activePopup?.focusable && this.popupWindow && !this.popupWindow.isDestroyed()) {
+      if (this.popupWindow.isFocused() || this.popupWindow.webContents.isFocused()) {
+        return;
+      }
+      // Give focus transfer a tick before deciding.
+      setTimeout(() => {
+        if (!this.activePopup?.focusable || !this.popupWindow || this.popupWindow.isDestroyed()) {
+          return;
+        }
+        if (this.popupWindow.isFocused() || this.popupWindow.webContents.isFocused()) {
+          return;
+        }
+        // If neither parent nor popup is focused, user switched away.
+        if (!this.parentWindow.isFocused()) {
+          this.closeOverlay();
+        }
+      }, 0);
+      return;
+    }
+    this.closeOverlay();
   }
 
   private resolveActiveAnchor(activePopup: NonNullable<BrowserOverlayHost["activePopup"]>) {
@@ -214,11 +294,11 @@ export class BrowserOverlayHost {
     };
   }
 
-  private resolveOverlayBounds(anchor: BrowserRect, width: number, height: number) {
+  private resolveOverlayBounds(anchor: BrowserRect, width: number, height: number, shadowInset = overlayShadowInset) {
     validateAnchor(anchor);
     const gap = 8;
-    const outerWidth = width + overlayShadowInset * 2;
-    const outerHeight = height + overlayShadowInset * 2;
+    const outerWidth = width + shadowInset * 2;
+    const outerHeight = height + shadowInset * 2;
     const contentBounds = this.parentWindow.getContentBounds();
     const preferredX = contentBounds.x + anchor.x + anchor.width - width;
     const preferredY = contentBounds.y + anchor.y + anchor.height + gap;
@@ -235,8 +315,8 @@ export class BrowserOverlayHost {
       : preferredY;
 
     return {
-      x: clamp(preferredX - overlayShadowInset, workArea.x, workArea.x + workArea.width - outerWidth),
-      y: clamp(y - overlayShadowInset, workArea.y, workArea.y + workArea.height - outerHeight),
+      x: clamp(preferredX - shadowInset, workArea.x, workArea.x + workArea.width - outerWidth),
+      y: clamp(y - shadowInset, workArea.y, workArea.y + workArea.height - outerHeight),
       width: outerWidth,
       height: outerHeight,
     };
