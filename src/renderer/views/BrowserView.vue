@@ -758,7 +758,7 @@ watch(pendingDeleteCurrentSession, async () => {
             <span v-else>{{ topLevelTabInitial(tab) }}</span>
           </span>
           <span class="chrome-tab__title">{{ topLevelTabTitle(tab) }}</span>
-          <Close class="chrome-tab__close" theme="outline" size="13" @click.stop="closeTopLevelTab(tab)" />
+          <Close class="chrome-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeTopLevelTab(tab)" />
         </button>
 
         <button
@@ -801,7 +801,7 @@ watch(pendingDeleteCurrentSession, async () => {
           </span>
           <span class="chrome-session-tab__title">{{ sessionGroupTitle(group) }}</span>
           <span v-if="group.tabs.length > 1" class="chrome-session-tab__count">{{ group.tabs.length }}</span>
-          <Close class="chrome-session-tab__close" theme="outline" size="12" @click.stop="closeSessionGroup(group)" />
+          <Close class="chrome-session-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeSessionGroup(group)" />
         </button>
       </div>
 
@@ -833,7 +833,7 @@ watch(pendingDeleteCurrentSession, async () => {
             <span v-else>{{ pageTabTitle(tab).trim().slice(0, 1).toUpperCase() }}</span>
           </span>
           <span class="chrome-page-tab__title">{{ pageTabTitle(tab) }}</span>
-          <Close class="chrome-page-tab__close" theme="outline" size="12" @click.stop="closeBrowserTab(tab.id)" />
+          <Close class="chrome-page-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeBrowserTab(tab.id)" />
         </button>
       </div>
 
@@ -1488,12 +1488,19 @@ watch(pendingDeleteCurrentSession, async () => {
 
 .chrome-session-tab__close {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   color: #5f6368;
+  font-size: 0;
+  line-height: 0;
+}
+
+.chrome-session-tab__close svg {
+  width: 10px;
+  height: 10px;
 }
 
 .chrome-session-tab__close:hover {
@@ -1577,12 +1584,19 @@ watch(pendingDeleteCurrentSession, async () => {
 
 .chrome-page-tab__close {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   color: #667085;
+  font-size: 0;
+  line-height: 0;
+}
+
+.chrome-page-tab__close svg {
+  width: 10px;
+  height: 10px;
 }
 
 .chrome-page-tab__close:hover {
