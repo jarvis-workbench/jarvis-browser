@@ -129,11 +129,14 @@ export class IpcRouter {
     this.route("browser:close-tab", (_event, tabId: string) => this.browserHost.closeTab(tabId));
     this.route("browser:navigate-tab", (_event, tabId: string, url: string) => this.browserHost.navigateTab(tabId, url));
     this.route("browser:navigate", (_event, url: string) => this.browserHost.navigate(url));
-    this.route("browser:back", () => this.browserHost.back());
-    this.route("browser:forward", () => this.browserHost.forward());
-    this.route("browser:reload", () => this.browserHost.reload());
-    this.route("browser:reload-internal-error", () => this.browserHost.reloadErrorPage());
-    this.route("browser:stop", () => this.browserHost.stop());
+    this.route("browser:back", (_event, tabId?: string) => this.browserHost.back(tabId));
+    this.route("browser:forward", (_event, tabId?: string) => this.browserHost.forward(tabId));
+    this.route("browser:reload", (_event, tabId?: string) => this.browserHost.reload(tabId));
+    this.route("browser:reload-internal-error", (event) => {
+      const tabId = this.browserHost.findTabIdByWebContents(event.sender);
+      return this.browserHost.reloadErrorPage(tabId);
+    });
+    this.route("browser:stop", (_event, tabId?: string) => this.browserHost.stop(tabId));
     this.route("browser:find-in-page", (_event, input: Parameters<AppApi["browser"]["findInPage"]>[0]) =>
       this.browserHost.findInPage(input),
     );

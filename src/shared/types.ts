@@ -594,10 +594,10 @@ export interface AppApi {
     closeTab(tabId: string): Promise<void>;
     navigateTab(tabId: string, url: string): Promise<BrowserNavigationResult>;
     navigate(url: string): Promise<BrowserNavigationResult>;
-    back(): Promise<void>;
-    forward(): Promise<void>;
-    reload(): Promise<void>;
-    stop(): Promise<void>;
+    back(tabId?: string): Promise<void>;
+    forward(tabId?: string): Promise<void>;
+    reload(tabId?: string): Promise<void>;
+    stop(tabId?: string): Promise<void>;
     findInPage(input: BrowserFindInPageInput): Promise<BrowserFindInPageRequest | undefined>;
     stopFindInPage(action?: 'clearSelection' | 'keepSelection' | 'activateSelection'): Promise<void>;
     showHome(): Promise<void>;

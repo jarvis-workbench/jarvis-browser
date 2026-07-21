@@ -318,7 +318,13 @@ export const useBrowserStore = defineStore('browser', () => {
   }
 
   async function browserAction(action: 'back' | 'forward' | 'reload' | 'stop') {
-    await window.appApi.browser[action]();
+    const tabId = tabs.selectedTab.value?.id;
+    if (!tabId) {
+      return;
+    }
+
+    // Capture the originating tab at click time so a later tab switch cannot retarget the action.
+    await window.appApi.browser[action](tabId);
   }
 
   async function hideEmbeddedView() {

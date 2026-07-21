@@ -357,29 +357,29 @@ export class BrowserHost {
     return this.navigateTab(this.requireActiveTab().id, url);
   }
 
-  back() {
-    const view = this.getActiveView();
+  back(tabId?: string) {
+    const { view } = this.resolveTabView(tabId);
     if (view.webContents.navigationHistory.canGoBack()) {
       view.webContents.navigationHistory.goBack();
     }
   }
 
-  forward() {
-    const view = this.getActiveView();
+  forward(tabId?: string) {
+    const { view } = this.resolveTabView(tabId);
     if (view.webContents.navigationHistory.canGoForward()) {
       view.webContents.navigationHistory.goForward();
     }
   }
 
-  async reload() {
-    const tab = this.requireActiveTab();
+  async reload(tabId?: string) {
+    const { tab, view } = this.resolveTabView(tabId);
     const targetUrl = this.failedNavigationUrls.get(tab.id);
     if (targetUrl) {
-      await this.reloadFailedNavigation(tab.id, targetUrl, this.getActiveView());
+      await this.reloadFailedNavigation(tab.id, targetUrl, view);
       return;
     }
 
-    this.getActiveView().webContents.reload();
+    view.webContents.reload();
   }
 
   openDevTools() {
@@ -415,15 +415,15 @@ export class BrowserHost {
     }
   }
 
-  async reloadErrorPage() {
-    const tab = this.requireActiveTab();
+  async reloadErrorPage(tabId?: string) {
+    const { tab, view } = this.resolveTabView(tabId);
     const targetUrl = this.failedNavigationUrls.get(tab.id);
     if (!targetUrl) {
-      await this.reload();
+      await this.reload(tab.id);
       return;
     }
 
-    await this.reloadFailedNavigation(tab.id, targetUrl, this.getActiveView());
+    await this.reloadFailedNavigation(tab.id, targetUrl, view);
   }
 
   private async reloadFailedNavigation(tabId: string, targetUrl: string, view: WebContentsView) {
@@ -433,8 +433,9 @@ export class BrowserHost {
     await this.loadUrlSafely(targetUrl, view, tabId);
   }
 
-  stop() {
-    this.getActiveView().webContents.stop();
+  stop(tabId?: string) {
+    const { view } = this.resolveTabView(tabId);
+    view.webContents.stop();
   }
 
   openFindBar() {
@@ -895,16 +896,17 @@ export class BrowserHost {
     }
   }
 
-  handleBrowserShortcut(input: Electron.Input) {
+  handleBrowserShortcut(input: Electron.Input, sourceTabId?: string) {
+    const targetTabId = sourceTabId ?? this.activeTabId;
+
     if (isBrowserFindShortcut(input)) {
       this.openFindBar();
       return true;
     }
 
     if (isBrowserCloseTabShortcut(input)) {
-      const activeTabId = this.activeTabId;
-      if (activeTabId) {
-        void this.closeTab(activeTabId).catch(() => {
+      if (targetTabId) {
+        void this.closeTab(targetTabId).catch(() => {
           // 没有激活标签时忽略关闭标签快捷键。
         });
       }
@@ -912,7 +914,7 @@ export class BrowserHost {
     }
 
     if (isBrowserReloadShortcut(input)) {
-      void this.reload().catch(() => {
+      void this.reload(targetTabId).catch(() => {
         // 没有激活标签时忽略浏览器刷新快捷键。
       });
       return true;
@@ -1150,7 +1152,7 @@ export class BrowserHost {
         return;
       }
 
-      if (this.isViewAlive(tabId, webContents) && this.handleBrowserShortcut(input)) {
+      if (this.isViewAlive(tabId, webContents) && this.handleBrowserShortcut(input, tabId)) {
         event.preventDefault();
       }
     });
@@ -1750,6 +1752,25 @@ export class BrowserHost {
     } finally {
       this.findRequests.delete(tabId);
     }
+  }
+
+  private resolveTabView(tabId?: string) {
+    const tab = tabId ? this.requireTab(tabId) : this.requireActiveTab();
+    const view = this.views.get(tab.id);
+    if (!view || view.webContents.isDestroyed()) {
+      throw new Error("浏览器标签未打开");
+    }
+
+    return { tab, view };
+  }
+
+  findTabIdByWebContents(webContents: Electron.WebContents) {
+    for (const [tabId, view] of this.views) {
+      if (!view.webContents.isDestroyed() && view.webContents.id === webContents.id) {
+        return tabId;
+      }
+    }
+    return undefined;
   }
 
   private getActiveView() {
