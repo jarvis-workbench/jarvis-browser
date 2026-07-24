@@ -1,2 +1,4 @@
 curl_cffi
 requests
+playwright
+rebrowser-playwright

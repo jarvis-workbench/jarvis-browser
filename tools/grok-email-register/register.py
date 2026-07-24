@@ -9,7 +9,10 @@ Mailbox:
 
 Cloudflare Turnstile is optional:
   1) try create-user without token
-  2) only if server requires Turnstile, use provided token / captcha API
+  2) only if server requires Turnstile:
+       - provided --turnstile-token
+       - CAPSOLVER_API_KEY / YESCAPTCHA_API_KEY
+       - local Chrome (Playwright/CDP) only for Turnstile
 """
 from __future__ import annotations
 
@@ -48,6 +51,14 @@ except ImportError:  # pragma: no cover
     if str(_here) not in sys.path:
         sys.path.insert(0, str(_here))
     from cfmail import CFMail
+
+try:
+    from browser_turnstile import solve_turnstile_browser, stop_shared_browser
+except ImportError:  # pragma: no cover
+    _here = Path(__file__).resolve().parent
+    if str(_here) not in sys.path:
+        sys.path.insert(0, str(_here))
+    from browser_turnstile import solve_turnstile_browser, stop_shared_browser
 
 
 ACCOUNTS_BASE = "https://accounts.x.ai"
@@ -887,16 +898,112 @@ class XaiEmailRegister:
     def resolve_turnstile_if_needed(
         self,
         prefer_token: str = "",
-        allow_api: bool = True,
+        allow_api: bool = False,
+        allow_browser: bool = True,
+        browser_proxy: str = "",
+        cdp: str = "",
+        no_browser: bool = False,
+        force_new_chrome: bool = False,
+        timeout_s: float = 180,
+        harvest_email: str = "",
+        harvest_code: str = "",
+        fetch_code=None,
+        given: str = "",
+        family: str = "",
+        password: str = "",
+        interactive: bool = True,
     ) -> str:
         if prefer_token.strip():
             return prefer_token.strip()
-        if not allow_api:
-            return ""
-        if not (os.getenv("CAPSOLVER_API_KEY") or os.getenv("YESCAPTCHA_API_KEY")):
-            return ""
-        log("[turnstile] solving via captcha API (server required it)...")
-        return solve_turnstile_api(self.turnstile_sitekey, SIGNUP_URL)
+
+        # Self-solve first: local Chrome (optionally with protocol gRPC bridge).
+        # Captcha platforms are opt-in only when allow_api=True AND key is set.
+        if allow_browser and not no_browser:
+            try:
+                if not harvest_email:
+                    log(
+                        "[turnstile] browser path needs a harvest mailbox "
+                        "(full UI to credentials). Missing harvest_email."
+                    )
+                else:
+                    log(
+                        f"[turnstile] self-solve via local Chrome harvest={harvest_email}"
+                    )
+
+                def bridge_fetch(url: str, method: str, headers: dict, body: bytes):
+                    """Replay browser gRPC with curl_cffi so CF edge won't 403."""
+                    try:
+                        self.warm()
+                    except Exception:
+                        pass
+                    # Forward browser headers that matter for grpc-web / RSC / next-action
+                    out_h = {}
+                    for k, v in (headers or {}).items():
+                        lk = str(k).lower()
+                        if lk in ("host", "content-length", "connection", "keep-alive"):
+                            continue
+                        out_h[k] = v
+                    out_h.setdefault("origin", ACCOUNTS_BASE)
+                    out_h.setdefault("referer", SIGNUP_URL)
+                    if "auth_mgmt.AuthManagement" in (url or ""):
+                        out_h["content-type"] = (
+                            headers.get("content-type")
+                            or headers.get("Content-Type")
+                            or "application/grpc-web+proto"
+                        )
+                        out_h["x-grpc-web"] = headers.get("x-grpc-web") or "1"
+                        out_h.setdefault("x-user-agent", "connect-es/2.1.1")
+                        out_h.setdefault("accept", "*/*")
+                    # Prefer browser-sent content-type for grpc-web framing compatibility
+                    try:
+                        r = self.s.request(
+                            method or "POST",
+                            url,
+                            data=body or b"",
+                            headers=out_h,
+                            impersonate=self.impersonate,
+                            timeout=45,
+                        )
+                    except Exception as e:
+                        log(f"[bridge] curl_cffi err: {e}; retry once")
+                        # recreate session once
+                        self.s = cffi_requests.Session()
+                        if self.proxy:
+                            self.s.proxies = {"http": self.proxy, "https": self.proxy}
+                        self.warm()
+                        r = self.s.request(
+                            method or "POST",
+                            url,
+                            data=body or b"",
+                            headers=out_h,
+                            impersonate=self.impersonate,
+                            timeout=45,
+                        )
+                    return int(r.status_code), dict(r.headers), r.content or b""
+
+                tok = solve_turnstile_browser(
+                    cdp=cdp or os.getenv("GROK_CDP_URL", "http://127.0.0.1:9333"),
+                    browser_proxy=browser_proxy or "",
+                    force_new_chrome=force_new_chrome,
+                    timeout_s=timeout_s,
+                    email=harvest_email,
+                    code=harvest_code,
+                    fetch_code=fetch_code,
+                    bridge_fetch=bridge_fetch,
+                    given=given or "Ada",
+                    family=family or "Lovelace",
+                    password=password or "",
+                    interactive=interactive,
+                    try_inject=True,
+                    log=log,
+                )
+                if tok:
+                    log(f"[turnstile] browser token len={len(tok)}")
+                    return tok
+                log("[turnstile] browser returned empty token")
+            except Exception as exc:
+                log(f"[turnstile] browser solve failed: {exc}")
+        return ""
 
     def register(
         self,
@@ -908,6 +1015,16 @@ class XaiEmailRegister:
         password: str = "",
         turnstile_token: str = "",
         force_turnstile: bool = False,
+        allow_browser: bool = True,
+        browser_proxy: str = "",
+        cdp: str = "",
+        no_browser: bool = False,
+        force_new_chrome: bool = False,
+        harvest_email: str = "",
+        harvest_code: str = "",
+        fetch_code=None,
+        interactive: bool = True,
+        turnstile_timeout_s: float = 120,
     ) -> RegisterResult:
         given, family, password = build_profile(given, family, password)
         result = RegisterResult(ok=False, email=email, password=password)
@@ -922,11 +1039,26 @@ class XaiEmailRegister:
             # force_turnstile is opt-in for environments that always require it.
             if force_turnstile and not token:
                 log("[turnstile] force mode: solving before create-user")
-                token = self.resolve_turnstile_if_needed(allow_api=True)
+                token = self.resolve_turnstile_if_needed(
+                    allow_api=bool(os.getenv("CAPSOLVER_API_KEY") or os.getenv("YESCAPTCHA_API_KEY") or os.getenv("GROK_ALLOW_CAPTCHA_API")),
+                    allow_browser=allow_browser,
+                    browser_proxy=browser_proxy,
+                    cdp=cdp,
+                    no_browser=no_browser,
+                    force_new_chrome=force_new_chrome,
+                    timeout_s=turnstile_timeout_s,
+                    harvest_email=harvest_email,
+                    harvest_code=harvest_code,
+                    fetch_code=fetch_code,
+                    given=given,
+                    family=family,
+                    password=password,
+                    interactive=interactive,
+                )
                 result.turnstile_used = bool(token)
                 if not token:
                     raise RuntimeError(
-                        "--force-turnstile set, but no token and no CAPSOLVER_API_KEY / YESCAPTCHA_API_KEY"
+                        "--force-turnstile set, but no token / captcha key / browser solver success"
                     )
 
             # Attempt 1: empty token (or user-provided token). Works when CF is off.
@@ -940,18 +1072,56 @@ class XaiEmailRegister:
                 err = str(exc)
                 if is_turnstile_required(err) and not token:
                     log("[turnstile] server required token; resolving only because create-user asked for it...")
-                    token = self.resolve_turnstile_if_needed(prefer_token=turnstile_token, allow_api=True)
+                    token = self.resolve_turnstile_if_needed(
+                        prefer_token=turnstile_token,
+                        allow_api=bool(os.getenv("CAPSOLVER_API_KEY") or os.getenv("YESCAPTCHA_API_KEY") or os.getenv("GROK_ALLOW_CAPTCHA_API")),
+                        allow_browser=allow_browser,
+                        browser_proxy=browser_proxy,
+                        cdp=cdp,
+                        no_browser=no_browser,
+                        force_new_chrome=force_new_chrome,
+                        timeout_s=turnstile_timeout_s,
+                        harvest_email=harvest_email,
+                        harvest_code=harvest_code,
+                        fetch_code=fetch_code,
+                        given=given,
+                        family=family,
+                        password=password,
+                        interactive=interactive,
+                    )
                     if not token:
                         raise RuntimeError(
-                            "服务端要求 Cloudflare Turnstile，但当前未提供 token，"
-                            "也没有 CAPSOLVER_API_KEY / YESCAPTCHA_API_KEY"
+                            "服务端要求 Cloudflare Turnstile，但未能取得 token。\n"
+                            "当前策略：自己过验证（本机 Chrome + 协议 gRPC 桥），不走打码平台。\n"
+                            "可尝试：\n"
+                            "  1) 再跑一次 ./run.sh ，在弹出的 Chrome 里完成/点击 Turnstile\n"
+                            "  2) --browser-proxy 住宅代理后重试\n"
+                            "  3) 用日常 Chrome 开 remote debugging 后 --cdp http://127.0.0.1:9222\n"
+                            "  4) 手动 --turnstile-token '...'\n"
+                            "说明：若日志出现 browser-cf-403，表示浏览器直连 gRPC 被拦；"
+                            "已用 curl_cffi 桥接时应能继续。若仍 Checking，需要更干净的浏览器指纹/出口。"
                         ) from exc
                     result.turnstile_used = True
                     cookie_url, _ = self.create_user(email, code, given, family, password, token)
                 elif is_turnstile_required(err) and token:
                     # token present but rejected: one optional re-solve if API available
                     log("[turnstile] token rejected; trying one fresh solve if API available...")
-                    fresh = self.resolve_turnstile_if_needed(allow_api=True)
+                    fresh = self.resolve_turnstile_if_needed(
+                        allow_api=bool(os.getenv("CAPSOLVER_API_KEY") or os.getenv("YESCAPTCHA_API_KEY") or os.getenv("GROK_ALLOW_CAPTCHA_API")),
+                        allow_browser=allow_browser,
+                        browser_proxy=browser_proxy,
+                        cdp=cdp,
+                        no_browser=no_browser,
+                        force_new_chrome=force_new_chrome,
+                        timeout_s=turnstile_timeout_s,
+                        harvest_email=harvest_email,
+                        harvest_code=harvest_code,
+                        fetch_code=fetch_code,
+                        given=given,
+                        family=family,
+                        password=password,
+                        interactive=interactive,
+                    )
                     if not fresh or fresh == token:
                         raise
                     result.turnstile_used = True
@@ -1083,6 +1253,46 @@ def cmd_register(args: argparse.Namespace) -> int:
             "(默认 https://mailapi.icmk.top / icmk.top)"
         )
 
+    harvest_email = ""
+    harvest_code = ""
+    fetch_code = None
+    mail_for_harvest = None
+    if not args.no_browser and not (args.turnstile_token or "").strip():
+        try:
+            mail_for_harvest = _build_cfmail(args)
+        except Exception as exc:
+            log(f"[turnstile] harvest mail client unavailable: {exc}")
+
+    def _browser_prep() -> None:
+        nonlocal harvest_email, fetch_code
+        if harvest_email or mail_for_harvest is None:
+            return
+        he, _jwt = mail_for_harvest.create_mailbox()
+        harvest_email = he
+        log(f"[turnstile] harvest mailbox {harvest_email}")
+
+        def _fetch(em: str) -> str:
+            return mail_for_harvest.wait_verification_code(
+                em,
+                timeout=args.mail_timeout,
+                log=lambda m: log(f"[mail/harvest] {m}"),
+            )
+
+        fetch_code = _fetch
+
+    _orig_resolve = client.resolve_turnstile_if_needed
+
+    def _resolve_wrapped(*a, **kw):
+        if not kw.get("harvest_email") and not args.no_browser:
+            _browser_prep()
+            kw["harvest_email"] = harvest_email
+            kw["fetch_code"] = fetch_code
+            kw.setdefault("interactive", not getattr(args, "no_interactive", False))
+            kw.setdefault("timeout_s", float(getattr(args, "turnstile_timeout", 120)))
+        return _orig_resolve(*a, **kw)
+
+    client.resolve_turnstile_if_needed = _resolve_wrapped  # type: ignore
+
     result = client.register(
         email,
         code,
@@ -1091,6 +1301,16 @@ def cmd_register(args: argparse.Namespace) -> int:
         password=args.password,
         turnstile_token=args.turnstile_token,
         force_turnstile=args.force_turnstile,
+        allow_browser=not args.no_browser,
+        browser_proxy=args.browser_proxy,
+        cdp=args.cdp,
+        no_browser=args.no_browser,
+        force_new_chrome=args.force_new_chrome,
+        harvest_email=harvest_email,
+        harvest_code=harvest_code,
+        fetch_code=fetch_code,
+        interactive=not getattr(args, "no_interactive", False),
+        turnstile_timeout_s=float(getattr(args, "turnstile_timeout", 120)),
     )
     payload = result.as_dict()
     if mailbox_password:
@@ -1120,6 +1340,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-turnstile",
         action="store_true",
         help="强制先解 Turnstile（默认：先空 token 提交，失败后再解）",
+    )
+    p.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="禁止本机 Chrome 解 Turnstile（仅 token/打码）",
+    )
+    p.add_argument(
+        "--browser-proxy",
+        default=os.getenv("GROK_BROWSER_PROXY", ""),
+        help="仅给 Chrome 解 Turnstile 用的代理",
+    )
+    p.add_argument(
+        "--cdp",
+        default=os.getenv("GROK_CDP_URL", "http://127.0.0.1:9333"),
+        help="Chrome CDP 地址，默认 http://127.0.0.1:9333",
+    )
+    p.add_argument(
+        "--force-new-chrome",
+        action="store_true",
+        help="强制新起 Chrome，不复用已有 CDP",
+    )
+    p.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Turnstile 卡住时不等待人工在 Chrome 窗口点击",
+    )
+    p.add_argument(
+        "--turnstile-timeout",
+        type=float,
+        default=float(os.getenv("GROK_TURNSTILE_TIMEOUT", "180")),
+        help="浏览器解 Turnstile 超时秒数（默认 120，交互模式可再延长）",
     )
     p.add_argument("--castle-token", default="")
     # ---- CF temp-mail (mailapi.icmk.top) defaults; override via env/flags ----
