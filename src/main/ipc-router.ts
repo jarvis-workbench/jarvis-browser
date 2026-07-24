@@ -343,6 +343,17 @@ export class IpcRouter {
 
   private async dispatchOverlayAction(input: { action: string; id: string; anchor?: BrowserRect }) {
     const action = parseBrowserOverlayAction(input.action);
+
+    // Pin/unpin must keep the panel open and update in-place; closing first causes a visible flash.
+    if (action === "extension-pin") {
+      await this.browserHost.togglePinnedExtension(input.id);
+      const refreshed = this.browserHost.refreshExtensionMenuIfOpen({ anchor: input.anchor });
+      if (!refreshed && input.anchor) {
+        await this.browserHost.openExtensionMenu({ anchor: input.anchor });
+      }
+      return;
+    }
+
     this.browserHost.closeOverlay();
 
     switch (action) {
@@ -362,16 +373,15 @@ export class IpcRouter {
         });
         break;
       }
-      case "extension-pin": {
-        await this.browserHost.togglePinnedExtension(input.id);
-        if (input.anchor) {
-          await this.browserHost.openExtensionMenu({ anchor: input.anchor });
-        }
+      case "extensions": {
+        const activeTab = this.browserHost.getActiveTab();
+        const siteId = activeTab?.siteId?.trim() || undefined;
+        await this.browserHost.openInternalPage({
+          pageId: "extensions",
+          siteId,
+        });
         break;
       }
-      case "extensions":
-        await this.browserHost.openInternalPage({ pageId: "extensions" });
-        break;
       case "install-site-extension": {
         const activeTab = this.browserHost.getActiveTab();
         if (activeTab?.siteId) {

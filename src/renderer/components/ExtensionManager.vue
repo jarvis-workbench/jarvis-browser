@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Delete, FolderOpen, Plug, Search } from '@icon-park/vue-next';
 import { ElButton, ElMessage, ElSwitch } from 'element-plus';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { Site, SiteExtension } from '../../shared/types';
 import { formatError } from '../../shared/utils';
 
@@ -28,7 +28,15 @@ const pageHint = computed(() => selectedScope.value === 'global'
   : '只在所选站点会话中加载');
 
 onMounted(() => {
+  applySelectionFromLocation();
   void loadPage();
+  window.addEventListener('popstate', handleLocationChange);
+  window.addEventListener('hashchange', handleLocationChange);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('popstate', handleLocationChange);
+  window.removeEventListener('hashchange', handleLocationChange);
 });
 
 watch(selectedSiteId, (siteId) => {
@@ -36,6 +44,44 @@ watch(selectedSiteId, (siteId) => {
     void loadSiteExtensions(siteId);
   }
 });
+
+function handleLocationChange() {
+  applySelectionFromLocation();
+  if (selectedScope.value === 'site' && selectedSiteId.value) {
+    void loadSiteExtensions(selectedSiteId.value);
+  }
+}
+
+function readSiteIdFromLocation() {
+  try {
+    return new URL(window.location.href).searchParams.get('site')?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+function applySelectionFromLocation(availableSites: Site[] = sites.value) {
+  const siteFromUrl = readSiteIdFromLocation();
+  if (siteFromUrl && availableSites.some((site) => site.id === siteFromUrl)) {
+    selectedScope.value = 'site';
+    selectedSiteId.value = siteFromUrl;
+    return;
+  }
+
+  if (siteFromUrl && !availableSites.length) {
+    // Sites not loaded yet; keep requested site id for later resolution.
+    selectedScope.value = 'site';
+    selectedSiteId.value = siteFromUrl;
+    return;
+  }
+
+  selectedScope.value = 'global';
+  if (!selectedSiteId.value || (siteFromUrl && selectedSiteId.value === siteFromUrl)) {
+    selectedSiteId.value = availableSites[0]?.id ?? '';
+  } else if (selectedSiteId.value && !availableSites.some((site) => site.id === selectedSiteId.value)) {
+    selectedSiteId.value = availableSites[0]?.id ?? '';
+  }
+}
 
 async function loadPage() {
   try {
@@ -46,10 +92,11 @@ async function loadPage() {
     ]);
     sites.value = nextSites;
     globalExtensions.value = nextGlobalExtensions;
-    if (!selectedSiteId.value && nextSites[0]) {
-      selectedSiteId.value = nextSites[0].id;
-    }
-    if (selectedSiteId.value) {
+    applySelectionFromLocation(nextSites);
+    if (selectedScope.value === 'site' && selectedSiteId.value) {
+      await loadSiteExtensions(selectedSiteId.value);
+    } else if (selectedSiteId.value) {
+      // Prefetch first-site list so switching is instant, but keep global selected.
       await loadSiteExtensions(selectedSiteId.value);
     }
   } catch (error) {
@@ -134,11 +181,30 @@ async function uninstallExtension(extension: SiteExtension) {
 
 function selectGlobal() {
   selectedScope.value = 'global';
+  syncLocationQuery(undefined);
 }
 
 function selectSite(siteId: string) {
   selectedScope.value = 'site';
   selectedSiteId.value = siteId;
+  syncLocationQuery(siteId);
+}
+
+function syncLocationQuery(siteId?: string) {
+  try {
+    const next = new URL(window.location.href);
+    if (siteId) {
+      next.searchParams.set('site', siteId);
+    } else {
+      next.searchParams.delete('site');
+    }
+    const nextHref = next.toString();
+    if (nextHref !== window.location.href) {
+      window.history.replaceState(window.history.state, '', nextHref);
+    }
+  } catch {
+    // Internal page URL sync is best-effort for address bar consistency.
+  }
 }
 
 function filterExtensions(extensions: SiteExtension[]) {

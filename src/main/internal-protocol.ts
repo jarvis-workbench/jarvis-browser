@@ -42,8 +42,23 @@ export const internalPageUrls = {
   [clearBrowsingDataInternalPageId]: createInternalPageUrl(clearBrowsingDataInternalPageId),
 } satisfies Record<InternalPageId, string>;
 
-export function createInternalPageUrl(pageId: InternalPageId) {
-  return `${internalPageOrigin}${pageId}`;
+export function createInternalPageUrl(
+  pageId: InternalPageId,
+  query?: Record<string, string | undefined | null>,
+) {
+  const params = new URLSearchParams();
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      const trimmed = value?.trim();
+      if (trimmed) {
+        params.set(key, trimmed);
+      }
+    }
+  }
+  const search = params.toString();
+  return search
+    ? `${internalPageOrigin}${pageId}?${search}`
+    : `${internalPageOrigin}${pageId}`;
 }
 
 export function createInternalErrorPageUrl(info: { kind: "network" | "http"; url: string; errorText: string; statusCode?: number }) {

@@ -99,10 +99,11 @@
     }
 
     setSsoValue(value);
-    setStatus(
-      value ? "已读取当前会话 SSO。" : "当前对话未登录。",
-      value ? "success" : "error",
-    );
+    if (!value) {
+      setStatus("当前对话未登录。", "error");
+    } else {
+      setStatus("", "info");
+    }
   }
 
   function cookieLookupCandidates(tabUrl) {

@@ -37,6 +37,7 @@ import { ExtensionRuntime } from "../extension-runtime";
 import { HistoryManager } from "../history-manager";
 import {
   createInternalErrorPageUrl,
+  createInternalPageUrl,
   internalPageUrls,
   isInternalErrorPageUrl,
   isInternalPageUrl,
@@ -206,14 +207,21 @@ export class BrowserHost {
     return structuredClone(tab);
   }
 
-  async openInternalPage(input: { pageId: BrowserInternalPageId }) {
+  async openInternalPage(input: { pageId: BrowserInternalPageId; siteId?: string }) {
+    const url = this.resolveInternalPageUrl(input.pageId, input.siteId);
     const existing = [...this.tabs.values()].find((tab) => tab.kind === "internal" && tab.internalPageId === input.pageId);
     if (existing) {
-      await this.activateTab(existing.id);
+      const urlChanged = this.patchTab(existing, { url });
+      await this.activateTab(existing.id, { emitTabs: false });
+      if (urlChanged) {
+        this.emitTabsChanged();
+        this.runViewTask(existing.id, this.loadCreatedTab(existing.id, url));
+      } else {
+        this.emitTabsChanged();
+      }
       return structuredClone(existing);
     }
 
-    const url = internalPageUrls[input.pageId];
     const tab = this.createTabRecord({
       kind: "internal",
       url,
@@ -227,6 +235,18 @@ export class BrowserHost {
     this.emitTabsChanged();
     this.runViewTask(tab.id, this.loadCreatedTab(tab.id, url));
     return structuredClone(tab);
+  }
+
+  private resolveInternalPageUrl(pageId: BrowserInternalPageId, siteId?: string) {
+    if (pageId === "extensions") {
+      const normalizedSiteId = siteId?.trim();
+      if (normalizedSiteId) {
+        return createInternalPageUrl("extensions", { site: normalizedSiteId });
+      }
+      return createInternalPageUrl("extensions");
+    }
+
+    return internalPageUrls[pageId];
   }
 
   listTabs() {
@@ -757,6 +777,46 @@ export class BrowserHost {
   }
 
   async openExtensionMenu(input: { anchor: BrowserRect }) {
+    const model = this.buildExtensionMenuModel(input.anchor);
+    await this.openToolMenuOverlay({
+      key: "extension-menu",
+      ...model,
+      width: 320,
+    });
+  }
+
+  /**
+   * Update the open extension menu without closing it (used after pin/unpin).
+   */
+  refreshExtensionMenuIfOpen(input?: { anchor?: BrowserRect }) {
+    if (!this.browserOverlayHost.isActive("extension-menu")) {
+      return false;
+    }
+
+    const anchor = input?.anchor ?? this.browserOverlayHost.getActiveAnchor("extension-menu");
+    if (!anchor) {
+      return false;
+    }
+
+    const model = this.buildExtensionMenuModel(anchor);
+    return this.browserOverlayHost.updateActiveOverlayData(
+      "extension-menu",
+      {
+        title: model.title,
+        subtitle: model.subtitle,
+        anchor: model.anchor,
+        items: model.items,
+        emptyText: model.emptyText,
+      } satisfies BrowserOverlayMenuModel,
+      {
+        width: 320,
+        height: getToolOverlayHeight(model),
+        anchor: model.anchor,
+      },
+    );
+  }
+
+  private buildExtensionMenuModel(anchor: BrowserRect) {
     const activeTab = this.requireActiveTabOrUndefined();
     const site = activeTab?.siteId ? this.store.getSite(activeTab.siteId) : undefined;
     const extensions = [
@@ -764,19 +824,18 @@ export class BrowserHost {
       ...(site?.extensions ?? []),
     ].filter((extension) => extension.enabled && Boolean(extension.action?.defaultPopup));
     const pinnedExtensionIds = this.store.listPinnedExtensionIds();
-    await this.openToolMenuOverlay({
-      key: "extension-menu",
+    const items = createExtensionMenuItems({
+      extensions,
+      canInstallSiteExtension: Boolean(site),
+      pinnedExtensionIds,
+    });
+    return {
       title: "扩展程序",
       subtitle: `${extensions.length} 个可操作扩展`,
-      anchor: input.anchor,
-      width: 320,
-      items: createExtensionMenuItems({
-        extensions,
-        canInstallSiteExtension: Boolean(site),
-        pinnedExtensionIds,
-      }),
+      anchor,
+      items,
       emptyText: "当前没有可弹出的扩展",
-    });
+    } satisfies BrowserOverlayMenuModel;
   }
 
   listPinnedExtensionIds() {
@@ -1340,7 +1399,11 @@ export class BrowserHost {
 
   private resolveCanonicalTabUrl(tab: BrowserTab, navigatedUrl: string) {
     if (tab.kind === "internal") {
-      return tab.internalPageId ? internalPageUrls[tab.internalPageId] : tab.url;
+      // Preserve query params for internal pages like extensions?site=...
+      if (isInternalPageUrl(navigatedUrl)) {
+        return navigatedUrl;
+      }
+      return tab.url || (tab.internalPageId ? internalPageUrls[tab.internalPageId] : tab.url);
     }
 
     return isInternalPageUrl(navigatedUrl) ? tab.url : navigatedUrl;

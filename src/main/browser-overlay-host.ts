@@ -92,6 +92,35 @@ export class BrowserOverlayHost {
     return this.activePopup?.key === key && Boolean(this.popupWindow && !this.popupWindow.isDestroyed());
   }
 
+  getActiveAnchor(key: string) {
+    if (!this.isActive(key) || !this.activePopup) {
+      return undefined;
+    }
+    return this.resolveActiveAnchor(this.activePopup);
+  }
+
+  /**
+   * Refresh overlay payload in-place (no destroy/recreate) so pin toggles do not flash.
+   */
+  updateActiveOverlayData(
+    key: string,
+    data: unknown,
+    size?: { width: number; height: number; anchor?: BrowserRect },
+  ) {
+    if (!this.isActive(key) || !this.popupWindow || this.popupWindow.isDestroyed()) {
+      return false;
+    }
+
+    if (size) {
+      this.resizeActiveOverlay(key, size);
+    }
+
+    if (!this.popupWindow.webContents.isDestroyed()) {
+      this.popupWindow.webContents.send("overlay:data", data);
+    }
+    return true;
+  }
+
   resizeActiveOverlay(key: string, input: { width: number; height: number; anchor?: BrowserRect }) {
     if (!this.isActive(key) || !this.popupWindow || this.popupWindow.isDestroyed() || !this.activePopup) {
       return false;

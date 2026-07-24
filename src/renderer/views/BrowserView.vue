@@ -930,7 +930,7 @@ watch(pendingDeleteCurrentSession, async () => {
             title="扩展程序"
             @click="openExtensionMenuOverlay"
           >
-            <Puzzle theme="outline" size="18" />
+            <Puzzle theme="outline" size="16" />
           </button>
         </div>
 
@@ -1112,8 +1112,9 @@ watch(pendingDeleteCurrentSession, async () => {
 .chrome-extensions-cluster {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0;
-  min-width: 0;
+  min-width: 32px;
   max-width: 240px;
   height: 32px;
   padding: 0 2px;
@@ -1125,7 +1126,16 @@ watch(pendingDeleteCurrentSession, async () => {
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.chrome-extensions-cluster:hover {
+/* Only the control icon: keep the outer wrapper perfectly circular. */
+.chrome-extensions-cluster--empty-pins {
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  padding: 0;
+}
+
+/* Multi-icon cluster: shared outer capsule frame on group hover. */
+.chrome-extensions-cluster:not(.chrome-extensions-cluster--empty-pins):hover {
   border-color: rgba(60, 64, 67, 0.14);
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 1px 2px rgba(60, 64, 67, 0.12);
@@ -1148,22 +1158,39 @@ watch(pendingDeleteCurrentSession, async () => {
   font-size: 0;
   line-height: 0;
   cursor: pointer;
+  transition: background 120ms ease;
 }
 
+/* Alone, match other 32px circular toolbar buttons. */
+.chrome-extensions-cluster--empty-pins .chrome-extensions-cluster__button {
+  width: 32px;
+  height: 32px;
+}
+
+/* Each icon gets its own circular hover background. */
 .chrome-extensions-cluster__button:hover,
 .chrome-toolbar .chrome-extensions-cluster__button:hover {
-  background: transparent;
+  background: rgba(60, 64, 67, 0.12);
 }
 
 .chrome-extensions-cluster__button:active,
 .chrome-toolbar .chrome-extensions-cluster__button:active {
-  background: transparent;
+  background: rgba(60, 64, 67, 0.16);
+}
+
+/* Keep control / pinned / letter glyphs at the same visual size.
+   Global toolbar rules force .i-icon svg to 18px, so override with
+   higher specificity and :deep for IconPark internals. */
+.chrome-pinned-extension-button__icon,
+.chrome-pinned-extension-button__fallback,
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon,
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon :deep(svg) {
+  width: 16px;
+  height: 16px;
 }
 
 .chrome-pinned-extension-button__icon {
   display: block;
-  width: 16px;
-  height: 16px;
   object-fit: contain;
   border-radius: 3px;
   background: transparent;
@@ -1171,32 +1198,28 @@ watch(pendingDeleteCurrentSession, async () => {
 
 .chrome-pinned-extension-button__fallback {
   display: inline-flex;
-  width: 16px;
-  height: 16px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   background: transparent;
   color: #5f6368;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
 }
 
-.chrome-extensions-cluster__button > .i-icon {
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 0;
 }
 
-.chrome-extensions-cluster__button > .i-icon svg {
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon :deep(svg) {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
 }
 
 .chrome-tab--site-container {

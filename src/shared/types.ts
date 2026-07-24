@@ -214,6 +214,8 @@ export interface CreateSiteTabInput {
 
 export interface OpenInternalPageInput {
   pageId: BrowserInternalPageId;
+  /** When opening extensions from a site session, select that site in the manager. */
+  siteId?: string;
 }
 
 export type BrowserNavigationResult =

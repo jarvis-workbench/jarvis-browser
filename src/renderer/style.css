@@ -444,6 +444,25 @@ button:disabled {
   height: 18px;
 }
 
+/* Extensions cluster glyphs share one size: control icon, pinned icons, letter fallback. */
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon,
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon svg,
+.chrome-toolbar .chrome-pinned-extension-button__icon,
+.chrome-toolbar .chrome-pinned-extension-button__fallback {
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+}
+
+.chrome-toolbar .chrome-extensions-cluster__button > .i-icon svg {
+  display: block;
+}
+
+.chrome-toolbar .chrome-pinned-extension-button__fallback {
+  font-size: 12px;
+  line-height: 1;
+}
+
 .chrome-tab-add:hover,
 .chrome-toolbar button:hover {
   background: rgba(60, 64, 67, 0.12);
