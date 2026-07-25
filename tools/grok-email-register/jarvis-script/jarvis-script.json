@@ -1,0 +1,46 @@
+{
+  "id": "grok-email-register",
+  "name": "Grok 邮箱注册",
+  "version": "1.1.2",
+  "description": "真实 UI 注册：智能识别登录/注册页与 Turnstile 位置；支持开始/停止/重置；worker 建箱收码。",
+  "enabled": true,
+  "permissions": [
+    "http",
+    "browser-tab:message"
+  ],
+  "monitors": [
+    {
+      "id": "grok-register-bridge",
+      "name": "Grok register bridge",
+      "matches": [
+        "*://accounts.x.ai/*",
+        "*://*.x.ai/*",
+        "*://grok.com/*",
+        "*://*.grok.com/*"
+      ],
+      "events": [
+        "dom:message"
+      ]
+    }
+  ],
+  "workers": [
+    {
+      "id": "mail",
+      "entry": "worker/mail-worker.js"
+    }
+  ],
+  "contentScripts": [
+    {
+      "id": "register-ui",
+      "matches": [
+        "*://accounts.x.ai/*",
+        "*://*.x.ai/*",
+        "*://grok.com/*",
+        "*://*.grok.com/*"
+      ],
+      "js": [
+        "content/register.js"
+      ]
+    }
+  ]
+}

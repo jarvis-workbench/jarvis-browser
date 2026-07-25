@@ -1,4 +1,14 @@
-# Grok Email Register (Headless)
+# Grok Email Register
+
+> **当前推荐：Jarvis Script 真实浏览器注册**  
+> 目录：[`jarvis-script/`](./jarvis-script/)  
+> 在 Jarvis Browser 安装后打开 `https://accounts.x.ai/sign-up?redirect=grok-com`，脚本自动建邮箱→收码→填表→等 Turnstile→完成注册。  
+> 详见 [`jarvis-script/README.md`](./jarvis-script/README.md)。
+>
+> 下文 Python 协议脚本仅作链路验证基础，**不作为最终自动注册方案**（createUser 仍受 Turnstile 限制）。
+
+---
+
 
 纯协议实现 Grok / xAI「使用邮箱注册」：
 

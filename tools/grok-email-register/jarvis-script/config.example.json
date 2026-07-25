@@ -1,0 +1,11 @@
+{
+  "mailBase": "https://mailapi.icmk.top",
+  "adminPassword": "2434981942a@A",
+  "domains": ["icmk.top"],
+  "authMode": "x-admin-auth",
+  "createPath": "/admin/new_address",
+  "messagesPath": "/api/mails",
+  "detailPath": "/api/mail",
+  "pollIntervalMs": 2000,
+  "codeTimeoutMs": 180000
+}
