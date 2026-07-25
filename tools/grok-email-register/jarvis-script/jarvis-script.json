@@ -1,12 +1,14 @@
 {
   "id": "grok-email-register",
   "name": "Grok 邮箱注册",
-  "version": "1.1.2",
-  "description": "真实 UI 注册：智能识别登录/注册页与 Turnstile 位置；支持开始/停止/重置；worker 建箱收码。",
+  "version": "1.3.1",
+  "description": "真实 UI 注册：Electron 目录选择器选任意本地目录，主进程 fs 落盘账号；支持开始/停止/重置；worker 建箱收码。",
   "enabled": true,
   "permissions": [
-    "http",
-    "browser-tab:message"
+    "browser-tab:message",
+    "dialog",
+    "fs",
+    "http"
   ],
   "monitors": [
     {

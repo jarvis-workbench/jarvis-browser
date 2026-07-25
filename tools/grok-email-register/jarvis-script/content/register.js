@@ -45,6 +45,10 @@
           setStatus("待填写密码", "注册密码为必填，填好后点「开始注册」");
           return;
         }
+        if (!String(state.storagePath || "").trim()) {
+          setStatus("待选择存储目录", "请先点「选择」指定保存位置");
+          return;
+        }
         void startRegister("auto");
       }
     }, 1500);
@@ -55,6 +59,12 @@
       phase: "idle",
       email: "",
       password: "",
+      storagePath: "",
+      targets: {
+        cpa: false,
+        grok2api: false,
+        sso: false,
+      },
       given: "",
       family: "",
       code: "",
@@ -65,6 +75,7 @@
       stopped: false,
       lastResult: null,
       phaseLabel: "",
+      lastSavedPath: "",
     };
   }
 
@@ -101,15 +112,20 @@
       password: state.password,
       given: state.given,
       family: state.family,
+      targets: normalizeTargets(state.targets),
       finishedAt: state.finishedAt || Date.now(),
     };
   }
 
   function demoteSuccessKeepPassword(reason) {
     const password = String(state.password || "");
+    const storagePath = String(state.storagePath || "");
+    const targets = normalizeTargets(state.targets);
     const lastResult = state.lastResult;
     Object.assign(state, blankState(), {
       password,
+      storagePath,
+      targets,
       lastResult,
       phase: "idle",
       ok: false,
@@ -140,10 +156,30 @@
     try {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
-      return Object.assign(blankState(), JSON.parse(raw));
+      const loaded = Object.assign(blankState(), JSON.parse(raw));
+      loaded.targets = normalizeTargets(loaded.targets);
+      return loaded;
     } catch (_e) {
       return null;
     }
+  }
+
+  function normalizeTargets(value) {
+    const src = value && typeof value === "object" ? value : {};
+    return {
+      cpa: Boolean(src.cpa),
+      grok2api: Boolean(src.grok2api),
+      sso: Boolean(src.sso),
+    };
+  }
+
+  function selectedTargetLabels(targets) {
+    const t = normalizeTargets(targets);
+    const labels = [];
+    if (t.cpa) labels.push("CPA");
+    if (t.grok2api) labels.push("Grok2Api");
+    if (t.sso) labels.push("SSO");
+    return labels;
   }
 
   function saveState() {
@@ -158,10 +194,16 @@
     if (state.code) bits.push(`code=${state.code}`);
     if (String(state.password || "").trim()) bits.push("pwd=已填");
     else bits.push("pwd=未填");
+    const storagePath = String(state.storagePath || "").trim();
+    bits.push(storagePath ? `dir=${storagePath}` : "dir=未选");
+    const targetLabels = selectedTargetLabels(state.targets);
+    bits.push(targetLabels.length ? `to=${targetLabels.join(",")}` : "to=未选");
     const mode = detectPageMode();
     bits.push(`page=${mode}`);
+    if (state.lastSavedPath) bits.push(`saved=${state.lastSavedPath}`);
     return bits.join(" · ");
   }
+
 
   function ensureOverlay() {
     let panel = document.getElementById("grok-email-register-panel");
@@ -251,6 +293,80 @@
         #grok-email-register-password:disabled {
           opacity: .65;
         }
+        #grok-email-register-storage-label {
+          display: block;
+          margin: 0 0 8px;
+          color: #c9d7ef;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        #grok-email-register-storage-row {
+          display: flex;
+          gap: 6px;
+          margin-top: 4px;
+        }
+        #grok-email-register-storage-path {
+          flex: 1;
+          min-width: 0;
+          border: 1px solid rgba(120, 160, 255, 0.35);
+          border-radius: 7px;
+          padding: 7px 8px;
+          background: rgba(8, 12, 22, 0.9);
+          color: #e8eefc;
+          font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+          outline: none;
+        }
+        #grok-email-register-storage-choose {
+          flex: 0 0 auto;
+          width: auto;
+          min-width: 64px;
+          background: #334155;
+          color: #e8eefc;
+        }
+        #grok-email-register-storage-path:focus {
+          border-color: rgba(96, 165, 250, 0.9);
+          box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+        }
+        #grok-email-register-storage-path:disabled,
+        #grok-email-register-storage-choose:disabled {
+          opacity: .65;
+        }
+        #grok-email-register-storage-hint {
+          margin: 2px 0 6px;
+          color: #8fa3c4;
+          font-size: 11px;
+          font-weight: 400;
+          line-height: 1.35;
+          word-break: break-all;
+        }
+        #grok-email-register-targets {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          margin: 0 0 8px;
+          color: #c9d7ef;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        #grok-email-register-targets label {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          cursor: pointer;
+          user-select: none;
+          font-weight: 600;
+        }
+        #grok-email-register-targets input[type="checkbox"] {
+          width: 14px;
+          height: 14px;
+          margin: 0;
+          accent-color: #3b82f6;
+          cursor: pointer;
+        }
+        #grok-email-register-targets input[type="checkbox"]:disabled {
+          cursor: default;
+          opacity: .65;
+        }
       `;
       document.documentElement.appendChild(style);
 
@@ -262,6 +378,19 @@
           注册密码（必填）
           <input id="grok-email-register-password" type="text" autocomplete="new-password" spellcheck="false" placeholder="自己设置密码，必填" />
         </label>
+        <label id="grok-email-register-storage-label" for="grok-email-register-storage-path">
+          存储目录（必选）
+          <div id="grok-email-register-storage-row">
+            <input id="grok-email-register-storage-path" type="text" spellcheck="false" placeholder="点击选择… 任意本地目录" readonly />
+            <button id="grok-email-register-storage-choose" type="button">选择</button>
+          </div>
+        </label>
+        <div id="grok-email-register-storage-hint">通过 Electron 目录选择器选取；注册结果由主进程写入该目录</div>
+        <div id="grok-email-register-targets">
+          <label><input id="grok-email-register-target-cpa" type="checkbox" />CPA</label>
+          <label><input id="grok-email-register-target-grok2api" type="checkbox" />Grok2Api</label>
+          <label><input id="grok-email-register-target-sso" type="checkbox" />SSO</label>
+        </div>
         <div id="grok-email-register-status">就绪</div>
         <div id="grok-email-register-detail"></div>
         <div id="grok-email-register-result"></div>
@@ -278,6 +407,8 @@
     const stopBtn = document.getElementById("grok-email-register-stop");
     const resetBtn = document.getElementById("grok-email-register-reset");
     const passwordInput = document.getElementById("grok-email-register-password");
+    const storagePathInput = document.getElementById("grok-email-register-storage-path");
+    const storageChooseBtn = document.getElementById("grok-email-register-storage-choose");
     if (startBtn && !startBtn.dataset.bound) {
       startBtn.dataset.bound = "1";
       startBtn.addEventListener("click", () => { void startRegister("manual"); });
@@ -298,11 +429,68 @@
         refreshPanel();
       });
     }
+    if (storageChooseBtn && !storageChooseBtn.dataset.bound) {
+      storageChooseBtn.dataset.bound = "1";
+      storageChooseBtn.addEventListener("click", () => { void chooseStorageDirectory(); });
+    }
+    bindTargetCheckbox("grok-email-register-target-cpa", "cpa");
+    bindTargetCheckbox("grok-email-register-target-grok2api", "grok2api");
+    bindTargetCheckbox("grok-email-register-target-sso", "sso");
     if (passwordInput && passwordInput.value !== String(state.password || "")) {
       passwordInput.value = String(state.password || "");
     }
+    if (storagePathInput) {
+      const pathValue = String(state.storagePath || "");
+      if (storagePathInput.value !== pathValue) storagePathInput.value = pathValue;
+    }
     refreshPanel();
   }
+
+  function syncTargetCheckbox(elementId, key) {
+    const input = document.getElementById(elementId);
+    if (!input) return;
+    const checked = Boolean(state.targets && state.targets[key]);
+    if (input.checked !== checked) input.checked = checked;
+    input.disabled = controller.running;
+  }
+
+  function bindTargetCheckbox(elementId, key) {
+    const input = document.getElementById(elementId);
+    if (!input || input.dataset.bound) return;
+    input.dataset.bound = "1";
+    input.addEventListener("change", () => {
+      state.targets = normalizeTargets(state.targets);
+      state.targets[key] = Boolean(input.checked);
+      saveState();
+      refreshPanel();
+    });
+  }
+
+  async function chooseStorageDirectory() {
+    if (controller.running) return;
+    try {
+      setStatus("选择存储目录", "打开系统目录选择器…");
+      const result = await requestWorker("grok-register:choose-storage", {
+        defaultPath: String(state.storagePath || ""),
+      }, 300000);
+      if (result && result.canceled) {
+        setStatus("已取消选择", String(state.storagePath || "仍未选择目录"));
+        refreshPanel();
+        return;
+      }
+      const chosen = String((result && result.path) || "").trim();
+      if (!chosen) throw new Error("未返回目录路径");
+      state.storagePath = chosen;
+      saveState();
+      setStatus("存储目录已选择", chosen);
+      refreshPanel();
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      setStatus("选择目录失败", message);
+      refreshPanel();
+    }
+  }
+
 
   function refreshPanel() {
     const statusEl = document.getElementById("grok-email-register-status");
@@ -335,6 +523,7 @@
           password: state.password,
           given: state.given,
           family: state.family,
+          targets: normalizeTargets(state.targets),
         }, null, 2);
       } else if (!controller.running) {
         // Never keep stale green success blob on guest / non-success pages.
@@ -349,10 +538,30 @@
       }
       passwordInput.disabled = controller.running;
     }
+    const storagePathInput = document.getElementById("grok-email-register-storage-path");
+    const storageChooseBtn = document.getElementById("grok-email-register-storage-choose");
+    const storageHint = document.getElementById("grok-email-register-storage-hint");
+    const storagePath = String(state.storagePath || "").trim();
+    if (storagePathInput) {
+      if (storagePathInput.value !== storagePath) storagePathInput.value = storagePath;
+      storagePathInput.disabled = controller.running;
+    }
+    if (storageChooseBtn) storageChooseBtn.disabled = controller.running;
+    if (storageHint) {
+      storageHint.textContent = storagePath
+        ? `将写入：${storagePath}/accounts.jsonl 与 last-result.json`
+        : "请先点击「选择」用系统目录选择器指定保存位置（必选）";
+    }
+    state.targets = normalizeTargets(state.targets);
+    syncTargetCheckbox("grok-email-register-target-cpa", "cpa");
+    syncTargetCheckbox("grok-email-register-target-grok2api", "grok2api");
+    syncTargetCheckbox("grok-email-register-target-sso", "sso");
     const passwordOk = Boolean(String(state.password || "").trim());
-    if (startBtn) startBtn.disabled = controller.running || !passwordOk;
+    const storageOk = Boolean(storagePath);
+    if (startBtn) startBtn.disabled = controller.running || !passwordOk || !storageOk;
     if (stopBtn) stopBtn.disabled = !controller.running;
   }
+
 
   function setStatus(status, detail) {
     state.phaseLabel = status;
@@ -394,13 +603,21 @@
 
   function resetState() {
     stopRegister("reset");
-    Object.assign(state, blankState());
+    const password = String(state.password || "");
+    const storagePath = String(state.storagePath || "");
+    const targets = normalizeTargets(state.targets);
+    Object.assign(state, blankState(), {
+      password,
+      storagePath,
+      targets,
+    });
     saveState();
     setResult("");
     controller.stopRequested = false;
-    setStatus("已重置", "可重新开始");
+    setStatus("已重置", storagePath ? `可重新开始 · ${storagePath}` : "可重新开始（请选择存储目录）");
     refreshPanel();
   }
+
 
   function assertRunning(token) {
     if (controller.stopRequested || !controller.running || token !== controller.runToken) {
@@ -478,14 +695,20 @@
       await requestWorker("grok-register:ping", {}, 15000);
       assertRunning(token);
 
-      // Password is mandatory and must be set from the panel.
+      // Password + absolute storage directory are mandatory.
       syncPasswordFromPanel();
       const password = String(state.password || "").trim();
       if (!password) {
         throw new Error("请先在右下角面板填写注册密码（必填）");
       }
+      const storagePath = String(state.storagePath || "").trim();
+      if (!storagePath) {
+        throw new Error("请先点击「选择」指定存储目录（系统目录选择器）");
+      }
       state.password = password;
+      state.storagePath = storagePath;
       saveState();
+
 
       if (!state.email) {
         setPhase("create_mailbox", "创建临时邮箱...");
@@ -562,6 +785,7 @@
         password: state.password,
         given: state.given,
         family: state.family,
+        targets: normalizeTargets(state.targets),
         finishedAt: state.finishedAt,
       };
       saveState();
@@ -572,12 +796,21 @@
         given: state.given,
         family: state.family,
         code: state.code,
+        storagePath: String(state.storagePath || ""),
+        targets: normalizeTargets(state.targets),
         url: location.href,
       };
       setResult(JSON.stringify(summary, null, 2));
       setStatus("注册成功", state.email);
       try {
-        await requestWorker("grok-register:result", summary, 15000);
+        const saved = await requestWorker("grok-register:result", summary, 15000);
+        if (saved && saved.path) {
+          state.lastSavedPath = String(saved.path);
+          summary.savedPath = state.lastSavedPath;
+          setResult(JSON.stringify(summary, null, 2));
+          setStatus("注册成功", `${state.email} → ${state.lastSavedPath}`);
+          saveState();
+        }
       } catch (_e) {}
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
@@ -601,13 +834,19 @@
           url: location.href,
         }, null, 2));
         try {
-          await requestWorker("grok-register:result", {
+          const saved = await requestWorker("grok-register:result", {
             ok: false,
             email: state.email,
             password: state.password,
+            storagePath: String(state.storagePath || ""),
+            targets: normalizeTargets(state.targets),
             error: message,
             url: location.href,
           }, 15000);
+          if (saved && saved.path) {
+            state.lastSavedPath = String(saved.path);
+            saveState();
+          }
         } catch (_e) {}
       }
     } finally {
@@ -629,6 +868,7 @@
       state.password = String(passwordInput.value || "");
     }
   }
+
 
   function makePassword() {
     // kept only for manual debug; registration never auto-uses this

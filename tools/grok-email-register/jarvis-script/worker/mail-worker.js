@@ -103,18 +103,43 @@ exports.onMonitorEvent = async function onMonitorEvent(event, api) {
       return;
     }
 
+    if (channel === "grok-register:choose-storage") {
+      assertFsApis(api);
+      const picked = await api.chooseDirectory({
+        title: "选择 Grok 注册结果存储目录",
+        defaultPath: String(data.defaultPath || ""),
+        buttonLabel: "选择此目录",
+      });
+      reply(api, {
+        channel: "grok-register:storage",
+        siteId,
+        sessionId,
+        payload: {
+          requestId,
+          ok: true,
+          canceled: Boolean(picked && picked.canceled),
+          path: picked && picked.path ? String(picked.path) : "",
+        },
+      });
+      return;
+    }
+
     if (channel === "grok-register:result") {
-      const result = {
-        at: new Date().toISOString(),
-        ...data,
-      };
-      await api.writeText("last-result.json", JSON.stringify(result, null, 2));
-      api.log(`[mail] result saved ok=${Boolean(data.ok)} email=${data.email || ""}`);
+      const saved = await saveRegistrationResult(api, data);
+      api.log(
+        `[mail] result saved ok=${Boolean(data.ok)} email=${data.email || ""} path=${saved.path}`,
+      );
       reply(api, {
         channel: "grok-register:result-ack",
         siteId,
         sessionId,
-        payload: { requestId, ok: true },
+        payload: {
+          requestId,
+          ok: true,
+          path: saved.path,
+          storagePath: saved.storagePath,
+          files: saved.files,
+        },
       });
       return;
     }
@@ -480,4 +505,83 @@ async function waitVerificationCode(api, email, timeoutMs) {
     await sleep(config.pollIntervalMs);
   }
   throw new Error(`no verification code within ${Math.round(timeoutMs / 1000)}s for ${email}`);
+}
+
+
+function assertFsApis(api) {
+  if (typeof api.chooseDirectory !== "function") {
+    throw new Error("当前 Jarvis 运行时不支持 api.chooseDirectory（需要更新主进程 dialog 能力）");
+  }
+  if (typeof api.writeFile !== "function" || typeof api.readFile !== "function" || typeof api.appendFile !== "function") {
+    throw new Error("当前 Jarvis 运行时不支持绝对路径 fs API（需要更新主进程 fs 能力）");
+  }
+}
+
+function joinPath(base, name) {
+  const root = String(base || "").replace(/[\\/]+$/, "");
+  const leaf = String(name || "").replace(/^[\\/]+/, "");
+  if (!root) return leaf;
+  return root.includes("\\") ? `${root}\\${leaf}` : `${root}/${leaf}`;
+}
+
+async function saveRegistrationResult(api, data) {
+  assertFsApis(api);
+  const storagePath = String((data && data.storagePath) || "").trim();
+  if (!storagePath) {
+    throw new Error("缺少 storagePath：请先通过系统目录选择器选择存储目录");
+  }
+
+  const result = {
+    at: new Date().toISOString(),
+    storagePath,
+    ...data,
+  };
+  delete result.requestId;
+
+  const lastPath = joinPath(storagePath, "last-result.json");
+  const listPath = joinPath(storagePath, "accounts.jsonl");
+  const indexPath = joinPath(storagePath, "index.json");
+
+  await api.writeFile(lastPath, JSON.stringify(result, null, 2));
+  try {
+    await api.writeText("last-result.json", JSON.stringify(result, null, 2));
+  } catch (_e) {}
+
+  if (result.ok && result.email) {
+    const line = JSON.stringify({
+      at: result.at,
+      email: result.email,
+      password: result.password || "",
+      given: result.given || "",
+      family: result.family || "",
+      code: result.code || "",
+      targets: result.targets || {},
+      url: result.url || "",
+    }) + "\n";
+    await api.appendFile(listPath, line);
+  }
+
+  let index = [];
+  try {
+    const raw = await api.readFile(indexPath);
+    index = JSON.parse(raw);
+    if (!Array.isArray(index)) index = [];
+  } catch (_e) {
+    index = [];
+  }
+  index.unshift({
+    at: result.at,
+    ok: Boolean(result.ok),
+    email: result.email || "",
+    password: result.password || "",
+    targets: result.targets || {},
+    error: result.error || "",
+  });
+  await api.writeFile(indexPath, JSON.stringify(index.slice(0, 200), null, 2));
+
+  return {
+    storagePath,
+    path: lastPath,
+    files: [lastPath, listPath, indexPath],
+  };
 }

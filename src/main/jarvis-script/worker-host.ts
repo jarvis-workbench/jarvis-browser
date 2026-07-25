@@ -22,6 +22,18 @@ export interface JarvisScriptWorkerApi {
   script: JarvisScript;
   readText(relativePath: string): Promise<string>;
   writeText(relativePath: string, value: string): Promise<void>;
+  /** Absolute filesystem path write via Electron main (requires permission `fs`). */
+  writeFile(path: string, value: string): Promise<{ path: string }>;
+  /** Absolute filesystem path read via Electron main (requires permission `fs`). */
+  readFile(path: string): Promise<string>;
+  /** Append text to absolute path via Electron main (requires permission `fs`). */
+  appendFile(path: string, value: string): Promise<{ path: string }>;
+  /** Native directory picker via Electron dialog (requires permission `dialog`). */
+  chooseDirectory(options?: {
+    title?: string;
+    defaultPath?: string;
+    buttonLabel?: string;
+  }): Promise<{ canceled: boolean; path?: string }>;
   log(message: string): void;
   request(input: string | URL, init?: RequestInit): Promise<unknown>;
   openWebSocket(url: string): WebSocket;
@@ -39,6 +51,34 @@ const api: JarvisScriptWorkerApi = {
     const filePath = resolveDataPath(relativePath);
     await mkdir(dirname(filePath), { recursive: true });
     await writeFile(filePath, value, "utf8");
+  },
+  writeFile: async (targetPath, value) => {
+    assertPermission("fs");
+    return rpc("fs:write-text", {
+      path: String(targetPath || ""),
+      value: String(value ?? ""),
+    }) as Promise<{ path: string }>;
+  },
+  readFile: async (targetPath) => {
+    assertPermission("fs");
+    return rpc("fs:read-text", {
+      path: String(targetPath || ""),
+    }) as Promise<string>;
+  },
+  appendFile: async (targetPath, value) => {
+    assertPermission("fs");
+    return rpc("fs:append-text", {
+      path: String(targetPath || ""),
+      value: String(value ?? ""),
+    }) as Promise<{ path: string }>;
+  },
+  chooseDirectory: async (options) => {
+    assertPermission("dialog");
+    return rpc("dialog:choose-directory", {
+      title: options?.title,
+      defaultPath: options?.defaultPath,
+      buttonLabel: options?.buttonLabel,
+    }) as Promise<{ canceled: boolean; path?: string }>;
   },
   log: (message) => parentPort?.postMessage({ type: "jarvis-script:log", message }),
   request: async (input, init) => {

@@ -1,7 +1,7 @@
 import { Worker } from "node:worker_threads";
-import { join, resolve } from "node:path";
-import { readFile } from "node:fs/promises";
-import type { BrowserWindow } from "electron";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dialog, type BrowserWindow } from "electron";
 import type { JarvisScript, JarvisScriptRuntimeState } from "../../shared/types";
 import { dataPaths } from "../data-paths";
 import type { MetadataStore } from "../store";
@@ -386,7 +386,85 @@ export class JarvisScriptRuntime {
       return undefined;
     }
 
+    if (message.method === "dialog:choose-directory") {
+      this.assertPermission(script, "dialog");
+      return this.handleChooseDirectory(message.payload);
+    }
+
+    if (message.method === "fs:write-text") {
+      this.assertPermission(script, "fs");
+      return this.handleFsWriteText(message.payload, { append: false });
+    }
+
+    if (message.method === "fs:append-text") {
+      this.assertPermission(script, "fs");
+      return this.handleFsWriteText(message.payload, { append: true });
+    }
+
+    if (message.method === "fs:read-text") {
+      this.assertPermission(script, "fs");
+      return this.handleFsReadText(message.payload);
+    }
+
     throw new Error(`不支持的 Jarvis Script RPC：${message.method}`);
+  }
+
+  private async handleChooseDirectory(payload?: Record<string, unknown>) {
+    if (this.options.window.isDestroyed()) {
+      throw new Error("主窗口不可用，无法打开目录选择器");
+    }
+
+    const result = await dialog.showOpenDialog(this.options.window, {
+      title: typeof payload?.title === "string" && payload.title.trim()
+        ? payload.title.trim()
+        : "选择存储目录",
+      defaultPath: typeof payload?.defaultPath === "string" && payload.defaultPath.trim()
+        ? payload.defaultPath.trim()
+        : undefined,
+      buttonLabel: typeof payload?.buttonLabel === "string" && payload.buttonLabel.trim()
+        ? payload.buttonLabel.trim()
+        : "选择",
+      properties: ["openDirectory", "createDirectory"],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true as const };
+    }
+
+    return {
+      canceled: false as const,
+      path: result.filePaths[0],
+    };
+  }
+
+  private resolveAbsoluteFsPath(rawPath: unknown) {
+    if (typeof rawPath !== "string" || !rawPath.trim()) {
+      throw new Error("文件路径不能为空");
+    }
+
+    const targetPath = rawPath.trim();
+    if (!isAbsolute(targetPath)) {
+      throw new Error("fs API 仅支持绝对路径");
+    }
+
+    return resolve(targetPath);
+  }
+
+  private async handleFsWriteText(payload: Record<string, unknown> | undefined, options: { append: boolean }) {
+    const targetPath = this.resolveAbsoluteFsPath(payload?.path);
+    const value = typeof payload?.value === "string" ? payload.value : String(payload?.value ?? "");
+    await mkdir(dirname(targetPath), { recursive: true });
+    if (options.append) {
+      await appendFile(targetPath, value, "utf8");
+    } else {
+      await writeFile(targetPath, value, "utf8");
+    }
+    return { path: targetPath };
+  }
+
+  private async handleFsReadText(payload?: Record<string, unknown>) {
+    const targetPath = this.resolveAbsoluteFsPath(payload?.path);
+    return readFile(targetPath, "utf8");
   }
 
   private async handleHttpRequest(script: JarvisScript, payload?: Record<string, unknown>) {

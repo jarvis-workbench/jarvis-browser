@@ -33,6 +33,7 @@ https://accounts.x.ai/sign-up?redirect=grok-com
 - 仅在 **sign-up** URL 会自动开始；**登录页不会自动跑**
 - 若落到登录页，会自动点「注册」切到注册流
 - 面板有 **注册密码（必填）** 输入框：不填不能开始；不会自动生成密码
+- 面板有 **存储目录（必选）**：点「选择」弹出 **Electron 系统目录选择器**，注册结果由主进程写入该绝对路径
 - 面板：**开始注册 / 停止 / 重置**（停止会立刻打断等待与填表）
 - Turnstile 会在登录页或资料页等不同位置出现，脚本按当前页智能等待/点选
 
@@ -85,3 +86,20 @@ Content 通过 `jarvis.send`；Worker 通过 `api.sendBrowserTabMessage`。
 - 若 IP 信誉差，仍可能一直 `Checking your Browser…`，这时需要更干净出口或手动点选。
 - 页面刷新后，脚本会尽量用 `sessionStorage` 续跑（邮箱/验证码/密码）。
 - 点面板「重置」清空续跑状态。
+
+
+## 存储目录
+
+点面板「选择」→ Electron `showOpenDialog` 选任意本地目录。
+
+注册成功后主进程写入：
+
+```text
+<你选的目录>/
+  last-result.json
+  accounts.jsonl
+  index.json
+```
+
+权限：`dialog`（选目录）+ `fs`（任意绝对路径读写）。需要带这些 RPC 的 Jarvis 主进程运行时。
+
