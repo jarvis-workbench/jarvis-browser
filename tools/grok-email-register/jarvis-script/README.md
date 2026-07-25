@@ -10,6 +10,34 @@
 
 Python 协议脚本（`../register.py`）只作链路验证；**本脚本才是当前推荐的注册方式**。
 
+## 1.4.6
+- 设备授权 consent 页：hidden `action` 默认为空，必须先写成 `action=allow` 再提交
+- 不再盲点任意 submit（会点到「拒绝」/ cookie 横幅，落到 `Invalid action`）
+- 按页面模式走 verify → consent → done，Invalid action 自动重开 verification URI
+
+## 1.4.5
+- 全流程顺序固定（仅勾选 CPA 或 Grok2Api 时进入 OAuth）：
+  1. 注册 UI 完成
+  2. 等重定向/登录拿到 grok.com `sso`（以及 cf / x-userid）
+  3. 可选 NSFW
+  4. 设备码 OAuth：device/code → `/oauth2/device?user_code=` → 继续/允许 → 轮询 token
+  5. 写 account / cpa / grok2api / sso
+- 未勾选 CPA/Grok2Api 时跳过 OAuth，只保存 account/SSO（若勾选）
+
+## 1.4.4
+- OAuth 改为设备码流程（对齐 grok2api / CLIProxyAPI）：
+  1. POST `auth.x.ai/oauth2/device/code` 取 `device_code` / `user_code`
+  2. 同会话打开 `accounts.x.ai/oauth2/device?user_code=...`
+  3. UI 点「继续 / 允许 / 授权」
+  4. 轮询 `oauth2/token` 拿 access/refresh
+- 需要在**已登录**的 Grok 会话里跑后处理；未登录会跳 sign-in
+- 脚本重装/刷新 1.4.4 即可（纯 jarvis-script 变更）
+
+## 1.4.3
+- 修复：主进程补齐 `session:get-cookies` → `handleGetCookies`，后置真正能读到 HttpOnly 的 `sso` / `cf_clearance` / `x-userid`
+- worker 读 cookie 时绑定当前 BrowserView 的 site/session partition，并写回 last-result
+- **需要重启 Jarvis**（改了 main process），再重装/刷新脚本 1.4.3
+
 ## 安装
 
 1. 打开 Jarvis Browser
@@ -103,3 +131,21 @@ Content 通过 `jarvis.send`；Worker 通过 `api.sendBrowserTabMessage`。
 
 权限：`dialog`（选目录）+ `fs`（任意绝对路径读写）。需要带这些 RPC 的 Jarvis 主进程运行时。
 
+
+
+## 落盘结构（存储目录示例 `/grok`）
+
+```text
+/grok/
+  last-result.json
+  account/<email>.text          # 邮箱|密码|SSO（分隔符可配置）
+  cpa/<email>.json              # CLIProxyAPI xai oauth 记录
+  grok2api/<email>.build.json   # grok_build oauth
+  grok2api/<email>.web.json     # grok_web sso
+  sso/<email>.text              # 纯 SSO
+```
+
+OAuth：SSO cookie → Authorization Code + PKCE（`referrer=grok-build`）→ `access_token` / `refresh_token`。  
+NSFW：面板勾选「开启 NSFW」后在页面上下文设置 birth-date + `UpdateUserFeatureControls`。
+
+面板配置（密码/目录/勾选/分隔符/NSFW）持久化在 **脚本 data 目录** `panel-config.json`，不是站点 sessionStorage 独占。

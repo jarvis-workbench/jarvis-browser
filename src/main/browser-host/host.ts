@@ -2050,8 +2050,10 @@ function titleForInternalPage(pageId: BrowserInternalPageId) {
 
 function createAutomationEvaluationCode(input: AutomationEvaluateInput) {
   const args = JSON.stringify(input.args ?? null);
-  const code = JSON.stringify(input.code);
+  const code = String(input.code || "");
   const timeoutMs = normalizeAutomationTimeout(input.timeoutMs, 30_000);
+  // Avoid new Function / eval: page CSP on grok.com blocks them.
+  // executeJavaScript can run a direct script body instead.
   return `
     (() => {
       const serialize = (value, depth = 0, seen = new WeakSet()) => {
@@ -2102,14 +2104,14 @@ function createAutomationEvaluationCode(input: AutomationEvaluateInput) {
         }
         return output;
       };
+      const args = ${args};
       const run = Promise.resolve()
-        .then(() => {
-          const source = ${code};
-          const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+        .then(async () => {
+          // Prefer expression form; fall back to statement body.
           try {
-            return new AsyncFunction('args', 'return (' + source + ')')( ${args} );
-          } catch {
-            return new AsyncFunction('args', source)(${args});
+            return await (async () => (${code}))();
+          } catch (expressionError) {
+            return await (async () => { ${code} })();
           }
         })
         .then((value) => serialize(value));

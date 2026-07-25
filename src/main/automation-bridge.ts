@@ -152,6 +152,18 @@ export class AutomationBridge {
       return this.browserHost.evaluateAutomation(body);
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/navigate") {
+      const body = await readJsonBody<{ url?: string; tabId?: string }>(request);
+      const url = typeof body.url === "string" ? body.url.trim() : "";
+      if (!url) {
+        throw new HttpError(400, "url is required");
+      }
+      if (typeof body.tabId === "string" && body.tabId.trim()) {
+        return this.browserHost.navigateTab(body.tabId.trim(), url);
+      }
+      return this.browserHost.navigate(url);
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/dom/query") {
       const body = await readJsonBody<AutomationDomQueryInput>(request);
       if (typeof body.selector !== "string" || !body.selector.trim()) {

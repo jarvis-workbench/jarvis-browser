@@ -1,14 +1,15 @@
 {
   "id": "grok-email-register",
   "name": "Grok 邮箱注册",
-  "version": "1.3.1",
-  "description": "真实 UI 注册：Electron 目录选择器选任意本地目录，主进程 fs 落盘账号；支持开始/停止/重置；worker 建箱收码。",
+  "version": "1.4.6",
+  "description": "真实 UI 注册 + 脚本目录持久配置 + Electron 目录落盘(account/cpa/grok2api/sso) + OAuth(device-code + consent action=allow) + 可选 NSFW",
   "enabled": true,
   "permissions": [
     "browser-tab:message",
     "dialog",
     "fs",
-    "http"
+    "http",
+    "session"
   ],
   "monitors": [
     {

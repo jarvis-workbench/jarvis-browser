@@ -36,6 +36,9 @@
   ensureOverlay();
   sanitizeRestoredState();
   refreshPanel();
+  void bootstrapPanelConfig().then(() => {
+    void resumeFromPendingJobs();
+  });
 
   // Soft autostart only on clear signup URLs, never on sign-in.
   if (shouldAutostart()) {
@@ -60,6 +63,8 @@
       email: "",
       password: "",
       storagePath: "",
+      accountSeparator: "|",
+      enableNsfw: false,
       targets: {
         cpa: false,
         grok2api: false,
@@ -68,6 +73,13 @@
       given: "",
       family: "",
       code: "",
+      sso: "",
+      cloudflareCookies: "",
+      userId: "",
+      deviceOauth: null,
+      oauthToken: null,
+      oauthError: "",
+      nsfw: null,
       error: "",
       startedAt: 0,
       finishedAt: 0,
@@ -76,6 +88,7 @@
       lastResult: null,
       phaseLabel: "",
       lastSavedPath: "",
+      panelConfigLoaded: false,
     };
   }
 
@@ -120,13 +133,18 @@
   function demoteSuccessKeepPassword(reason) {
     const password = String(state.password || "");
     const storagePath = String(state.storagePath || "");
+    const accountSeparator = String(state.accountSeparator || "|") || "|";
+    const enableNsfw = Boolean(state.enableNsfw);
     const targets = normalizeTargets(state.targets);
     const lastResult = state.lastResult;
     Object.assign(state, blankState(), {
       password,
       storagePath,
+      accountSeparator,
+      enableNsfw,
       targets,
       lastResult,
+      panelConfigLoaded: true,
       phase: "idle",
       ok: false,
       phaseLabel: "就绪",
@@ -182,6 +200,160 @@
     return labels;
   }
 
+  async function bootstrapPanelConfig() {
+    try {
+      const res = await requestWorker("grok-register:load-panel-config", {}, 15000);
+      const cfg = (res && res.config) || {};
+      applyPanelConfig(cfg, { persistLocal: true });
+      state.panelConfigLoaded = true;
+      saveState();
+      refreshPanel();
+      setStatus("就绪", "配置已从脚本目录加载");
+    } catch (error) {
+      state.panelConfigLoaded = true;
+      refreshPanel();
+      pageLog(`load panel config failed: ${error && error.message ? error.message : error}`);
+    }
+  }
+
+  function applyPanelConfig(cfg, options) {
+    const src = cfg && typeof cfg === "object" ? cfg : {};
+    if (typeof src.password === "string") state.password = src.password;
+    if (typeof src.storagePath === "string") state.storagePath = src.storagePath;
+    if (typeof src.accountSeparator === "string" && src.accountSeparator) {
+      state.accountSeparator = src.accountSeparator;
+    }
+    state.enableNsfw = Boolean(src.enableNsfw);
+    state.targets = normalizeTargets(src.targets || state.targets);
+    if (options && options.persistLocal) saveState();
+  }
+
+  function collectPanelConfig() {
+    return {
+      password: String(state.password || ""),
+      storagePath: String(state.storagePath || ""),
+      accountSeparator: String(state.accountSeparator || "|") || "|",
+      enableNsfw: Boolean(state.enableNsfw),
+      targets: normalizeTargets(state.targets),
+    };
+  }
+
+  let panelPersistTimer = null;
+  function persistPanelConfigSoon() {
+    saveState();
+    refreshPanel();
+    if (panelPersistTimer) clearTimeout(panelPersistTimer);
+    panelPersistTimer = setTimeout(() => {
+      void requestWorker("grok-register:save-panel-config", { config: collectPanelConfig() }, 15000)
+        .catch((error) => pageLog(`save panel config failed: ${error && error.message ? error.message : error}`));
+    }, 250);
+  }
+
+  const SIGNUP_URL = "https://accounts.x.ai/sign-up?redirect=grok-com";
+
+  function isOnSignupFlow() {
+    const href = String(location.href || "");
+    if (/accounts\.x\.ai/i.test(href) && /\/sign-up\b/i.test(href)) return true;
+    const mode = detectPageMode();
+    return ["sign-up", "sign-up-email", "verify", "credentials"].includes(mode);
+  }
+
+  function buildPendingJob(kind, extra) {
+    return Object.assign({
+      kind, // start | finalize
+      email: state.email || "",
+      password: state.password || "",
+      storagePath: state.storagePath || "",
+      accountSeparator: state.accountSeparator || "|",
+      enableNsfw: Boolean(state.enableNsfw),
+      targets: normalizeTargets(state.targets),
+      given: state.given || "",
+      family: state.family || "",
+      code: state.code || "",
+      sso: state.sso || "",
+      cloudflareCookies: state.cloudflareCookies || "",
+      userId: state.userId || "",
+      nsfw: state.nsfw || null,
+      deviceOauth: state.deviceOauth || null,
+      oauthToken: state.oauthToken || null,
+      oauthError: state.oauthError || "",
+      createdAt: new Date().toISOString(),
+    }, extra || {});
+  }
+
+  async function savePendingJob(job) {
+    await requestWorker("grok-register:save-pending-job", { job }, 15000);
+  }
+
+  async function loadPendingJob() {
+    try {
+      const res = await requestWorker("grok-register:load-pending-job", {}, 15000);
+      const job = res && res.job;
+      if (!job || typeof job !== "object" || job.cleared) return null;
+      if (!job.kind) return null;
+      return job;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  async function clearPendingJob() {
+    try {
+      await requestWorker("grok-register:clear-pending-job", {}, 15000);
+    } catch (_e) {}
+  }
+
+  async function resumeFromPendingJobs() {
+    if (controller.running) return;
+    const job = await loadPendingJob();
+    if (!job) return;
+
+    // restore essentials from durable job
+    if (job.password) state.password = String(job.password || state.password || "");
+    if (job.storagePath) state.storagePath = String(job.storagePath || state.storagePath || "");
+    if (job.accountSeparator) state.accountSeparator = String(job.accountSeparator || "|");
+    if (typeof job.enableNsfw === "boolean") state.enableNsfw = job.enableNsfw;
+    if (job.targets) state.targets = normalizeTargets(job.targets);
+    if (job.email) state.email = String(job.email || "");
+    if (job.given) state.given = String(job.given || "");
+    if (job.family) state.family = String(job.family || "");
+    if (job.code) state.code = String(job.code || "");
+    if (job.sso) state.sso = String(job.sso || "");
+    if (job.userId) state.userId = String(job.userId || "");
+    if (job.cloudflareCookies) state.cloudflareCookies = String(job.cloudflareCookies || "");
+    if (job.deviceOauth) state.deviceOauth = job.deviceOauth;
+    if (job.oauthToken) state.oauthToken = job.oauthToken;
+    if (job.oauthError) state.oauthError = String(job.oauthError || "");
+    if (job.nsfw) state.nsfw = job.nsfw;
+    saveState();
+    refreshPanel();
+
+    if (job.kind === "start") {
+      // Continue registration after navigating to signup page.
+      if (isOnSignupFlow()) {
+        setStatus("恢复注册", "检测到待开始任务，继续注册流程");
+        await clearPendingJob();
+        void startRegister("resume-start");
+      } else {
+        setStatus("等待进入注册页", "待开始任务已保存，正在跳转注册页…");
+        location.href = SIGNUP_URL;
+      }
+      return;
+    }
+
+    if (job.kind === "finalize") {
+      // After signup redirect/login, complete SSO/OAuth/NSFW/save.
+      setStatus("恢复后处理", "注册后重定向完成，继续采集 SSO/OAuth…");
+      void finalizeAfterRegister("resume-finalize", job);
+      return;
+    }
+
+    if (job.kind === "device-oauth") {
+      setStatus("恢复设备授权", "继续完成 Grok Build 设备码授权…");
+      void resumeDeviceOauth(job);
+    }
+  }
+
   function saveState() {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -198,6 +370,8 @@
     bits.push(storagePath ? `dir=${storagePath}` : "dir=未选");
     const targetLabels = selectedTargetLabels(state.targets);
     bits.push(targetLabels.length ? `to=${targetLabels.join(",")}` : "to=未选");
+    bits.push(`sep=${String(state.accountSeparator || "|")}`);
+    if (state.enableNsfw) bits.push("nsfw=on");
     const mode = detectPageMode();
     bits.push(`page=${mode}`);
     if (state.lastSavedPath) bits.push(`saved=${state.lastSavedPath}`);
@@ -216,21 +390,21 @@
           right: 16px;
           bottom: 16px;
           z-index: 2147483646;
-          width: 340px;
+          width: 420px;
           max-width: calc(100vw - 24px);
-          font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
           color: #e8eefc;
           background: rgba(12, 18, 32, 0.94);
           border: 1px solid rgba(120, 160, 255, 0.35);
           border-radius: 10px;
           box-shadow: 0 12px 40px rgba(0,0,0,.45);
           backdrop-filter: blur(8px);
-          padding: 12px 12px 10px;
+          padding: 14px 14px 12px;
         }
         #grok-email-register-panel h3 {
           margin: 0 0 6px;
-          font-size: 13px;
-          font-weight: 650;
+          font-size: 15px;
+          font-weight: 700;
         }
         #grok-email-register-status {
           color: #9ec1ff;
@@ -241,7 +415,7 @@
           color: #b7c3d9;
           word-break: break-all;
           white-space: pre-wrap;
-          max-height: 96px;
+          max-height: 140px;
           overflow: auto;
           margin-bottom: 8px;
         }
@@ -339,11 +513,51 @@
           line-height: 1.35;
           word-break: break-all;
         }
+        #grok-email-register-extra-row {
+          display: flex;
+          gap: 8px;
+          margin: 0 0 8px;
+          align-items: end;
+        }
+        #grok-email-register-separator-label,
+        #grok-email-register-nsfw-label {
+          display: block;
+          color: #c9d7ef;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        #grok-email-register-separator {
+          width: 64px;
+          box-sizing: border-box;
+          margin-top: 4px;
+          border: 1px solid rgba(120, 160, 255, 0.35);
+          border-radius: 7px;
+          padding: 7px 8px;
+          background: rgba(8, 12, 22, 0.9);
+          color: #e8eefc;
+          font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+          outline: none;
+          text-align: center;
+        }
+        #grok-email-register-nsfw-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 2px;
+          cursor: pointer;
+          user-select: none;
+        }
+        #grok-email-register-nsfw {
+          width: 14px;
+          height: 14px;
+          margin: 0;
+          accent-color: #3b82f6;
+        }
         #grok-email-register-targets {
           display: flex;
-          gap: 10px;
+          gap: 12px;
           align-items: center;
-          margin: 0 0 8px;
+          margin: 0 0 10px;
           color: #c9d7ef;
           font-size: 12px;
           font-weight: 600;
@@ -391,6 +605,15 @@
           <label><input id="grok-email-register-target-grok2api" type="checkbox" />Grok2Api</label>
           <label><input id="grok-email-register-target-sso" type="checkbox" />SSO</label>
         </div>
+        <div id="grok-email-register-extra-row">
+          <label id="grok-email-register-separator-label" for="grok-email-register-separator">
+            账号分隔符
+            <input id="grok-email-register-separator" type="text" maxlength="8" spellcheck="false" />
+          </label>
+          <label id="grok-email-register-nsfw-label" for="grok-email-register-nsfw">
+            <input id="grok-email-register-nsfw" type="checkbox" />开启 NSFW
+          </label>
+        </div>
         <div id="grok-email-register-status">就绪</div>
         <div id="grok-email-register-detail"></div>
         <div id="grok-email-register-result"></div>
@@ -425,8 +648,7 @@
       passwordInput.dataset.bound = "1";
       passwordInput.addEventListener("input", () => {
         state.password = String(passwordInput.value || "");
-        saveState();
-        refreshPanel();
+        persistPanelConfigSoon();
       });
     }
     if (storageChooseBtn && !storageChooseBtn.dataset.bound) {
@@ -436,6 +658,22 @@
     bindTargetCheckbox("grok-email-register-target-cpa", "cpa");
     bindTargetCheckbox("grok-email-register-target-grok2api", "grok2api");
     bindTargetCheckbox("grok-email-register-target-sso", "sso");
+    const separatorInput = document.getElementById("grok-email-register-separator");
+    if (separatorInput && !separatorInput.dataset.bound) {
+      separatorInput.dataset.bound = "1";
+      separatorInput.addEventListener("input", () => {
+        state.accountSeparator = String(separatorInput.value || "") || "|";
+        persistPanelConfigSoon();
+      });
+    }
+    const nsfwInput = document.getElementById("grok-email-register-nsfw");
+    if (nsfwInput && !nsfwInput.dataset.bound) {
+      nsfwInput.dataset.bound = "1";
+      nsfwInput.addEventListener("change", () => {
+        state.enableNsfw = Boolean(nsfwInput.checked);
+        persistPanelConfigSoon();
+      });
+    }
     if (passwordInput && passwordInput.value !== String(state.password || "")) {
       passwordInput.value = String(state.password || "");
     }
@@ -461,8 +699,7 @@
     input.addEventListener("change", () => {
       state.targets = normalizeTargets(state.targets);
       state.targets[key] = Boolean(input.checked);
-      saveState();
-      refreshPanel();
+      persistPanelConfigSoon();
     });
   }
 
@@ -481,9 +718,8 @@
       const chosen = String((result && result.path) || "").trim();
       if (!chosen) throw new Error("未返回目录路径");
       state.storagePath = chosen;
-      saveState();
+      persistPanelConfigSoon();
       setStatus("存储目录已选择", chosen);
-      refreshPanel();
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       setStatus("选择目录失败", message);
@@ -549,13 +785,27 @@
     if (storageChooseBtn) storageChooseBtn.disabled = controller.running;
     if (storageHint) {
       storageHint.textContent = storagePath
-        ? `将写入：${storagePath}/accounts.jsonl 与 last-result.json`
+        ? `将写入：${storagePath}/account|cpa|grok2api|sso 与 last-result.json`
         : "请先点击「选择」用系统目录选择器指定保存位置（必选）";
     }
     state.targets = normalizeTargets(state.targets);
     syncTargetCheckbox("grok-email-register-target-cpa", "cpa");
     syncTargetCheckbox("grok-email-register-target-grok2api", "grok2api");
     syncTargetCheckbox("grok-email-register-target-sso", "sso");
+    const separatorInput = document.getElementById("grok-email-register-separator");
+    if (separatorInput) {
+      const sep = String(state.accountSeparator || "|") || "|";
+      if (document.activeElement !== separatorInput && separatorInput.value !== sep) {
+        separatorInput.value = sep;
+      }
+      separatorInput.disabled = controller.running;
+    }
+    const nsfwInput = document.getElementById("grok-email-register-nsfw");
+    if (nsfwInput) {
+      const checked = Boolean(state.enableNsfw);
+      if (nsfwInput.checked !== checked) nsfwInput.checked = checked;
+      nsfwInput.disabled = controller.running;
+    }
     const passwordOk = Boolean(String(state.password || "").trim());
     const storageOk = Boolean(storagePath);
     if (startBtn) startBtn.disabled = controller.running || !passwordOk || !storageOk;
@@ -605,11 +855,16 @@
     stopRegister("reset");
     const password = String(state.password || "");
     const storagePath = String(state.storagePath || "");
+    const accountSeparator = String(state.accountSeparator || "|") || "|";
+    const enableNsfw = Boolean(state.enableNsfw);
     const targets = normalizeTargets(state.targets);
     Object.assign(state, blankState(), {
       password,
       storagePath,
+      accountSeparator,
+      enableNsfw,
       targets,
+      panelConfigLoaded: true,
     });
     saveState();
     setResult("");
@@ -675,6 +930,37 @@
 
   async function startRegister(reason) {
     if (controller.running) return;
+
+    // Validate required panel fields before any navigation.
+    syncPasswordFromPanel();
+    const password = String(state.password || "").trim();
+    if (!password) {
+      setStatus("待填写密码", "注册密码为必填");
+      return;
+    }
+    const storagePath = String(state.storagePath || "").trim();
+    if (!storagePath) {
+      setStatus("待选择存储目录", "请先点「选择」指定保存位置");
+      return;
+    }
+    state.password = password;
+    state.storagePath = storagePath;
+    persistPanelConfigSoon();
+
+    // If not on signup flow, durable-save start job and hard-navigate.
+    if (!isOnSignupFlow()) {
+      try {
+        await requestWorker("grok-register:ping", {}, 15000);
+        await savePendingJob(buildPendingJob("start", { reason: String(reason || "manual") }));
+      } catch (error) {
+        setStatus("无法跳转注册页", error && error.message ? error.message : String(error));
+        return;
+      }
+      setStatus("跳转注册页", SIGNUP_URL);
+      location.href = SIGNUP_URL;
+      return;
+    }
+
     controller.running = true;
     controller.stopRequested = false;
     controller.runToken += 1;
@@ -694,20 +980,6 @@
     try {
       await requestWorker("grok-register:ping", {}, 15000);
       assertRunning(token);
-
-      // Password + absolute storage directory are mandatory.
-      syncPasswordFromPanel();
-      const password = String(state.password || "").trim();
-      if (!password) {
-        throw new Error("请先在右下角面板填写注册密码（必填）");
-      }
-      const storagePath = String(state.storagePath || "").trim();
-      if (!storagePath) {
-        throw new Error("请先点击「选择」指定存储目录（系统目录选择器）");
-      }
-      state.password = password;
-      state.storagePath = storagePath;
-      saveState();
 
 
       if (!state.email) {
@@ -775,43 +1047,23 @@
       }
 
       assertRunning(token);
-      state.ok = true;
-      state.phase = "done";
-      state.phaseLabel = "注册成功";
-      state.finishedAt = Date.now();
-      state.lastResult = {
-        ok: true,
-        email: state.email,
-        password: state.password,
-        given: state.given,
-        family: state.family,
-        targets: normalizeTargets(state.targets),
-        finishedAt: state.finishedAt,
-      };
-      saveState();
-      const summary = {
-        ok: true,
-        email: state.email,
-        password: state.password,
-        given: state.given,
-        family: state.family,
-        code: state.code,
-        storagePath: String(state.storagePath || ""),
-        targets: normalizeTargets(state.targets),
-        url: location.href,
-      };
-      setResult(JSON.stringify(summary, null, 2));
-      setStatus("注册成功", state.email);
+      // Signup may redirect immediately; persist finalize job BEFORE long work.
+      setPhase("pending_finalize", "注册完成，准备后处理（防重定向中断）…");
+      await savePendingJob(buildPendingJob("finalize", {
+        reason: String(reason || "register"),
+        submittedAt: new Date().toISOString(),
+      }));
+
+      // Try a short local harvest if page still alive; finalize is also resumed after redirect.
       try {
-        const saved = await requestWorker("grok-register:result", summary, 15000);
-        if (saved && saved.path) {
-          state.lastSavedPath = String(saved.path);
-          summary.savedPath = state.lastSavedPath;
-          setResult(JSON.stringify(summary, null, 2));
-          setStatus("注册成功", `${state.email} → ${state.lastSavedPath}`);
-          saveState();
-        }
-      } catch (_e) {}
+        await finalizeAfterRegister("inline", null, token);
+      } catch (error) {
+        const msg = error && error.message ? error.message : String(error);
+        if (msg === "stopped") throw error;
+        // Redirect often aborts inline finalize; pending job will resume on next page.
+        pageLog(`inline finalize deferred: ${msg}`);
+        setStatus("等待重定向后续跑", "后处理任务已保存到脚本目录，登录后自动继续");
+      }
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       if (message === "stopped" || controller.stopRequested) {
@@ -839,10 +1091,13 @@
             email: state.email,
             password: state.password,
             storagePath: String(state.storagePath || ""),
+            accountSeparator: String(state.accountSeparator || "|") || "|",
             targets: normalizeTargets(state.targets),
+            enableNsfw: Boolean(state.enableNsfw),
+            sso: state.sso || "",
             error: message,
             url: location.href,
-          }, 15000);
+          }, 30000);
           if (saved && saved.path) {
             state.lastSavedPath = String(saved.path);
             saveState();
@@ -869,6 +1124,781 @@
     }
   }
 
+
+
+  async function finalizeAfterRegister(reason, job, existingToken) {
+    if (controller.running && !existingToken) {
+      // another run in progress
+      return;
+    }
+    const ownsRun = !existingToken;
+    let token = existingToken;
+    if (ownsRun) {
+      controller.running = true;
+      controller.stopRequested = false;
+      controller.runToken += 1;
+      token = controller.runToken;
+    }
+
+    try {
+      if (job) {
+        if (job.email) state.email = String(job.email || state.email || "");
+        if (job.password) state.password = String(job.password || state.password || "");
+        if (job.storagePath) state.storagePath = String(job.storagePath || state.storagePath || "");
+        if (job.accountSeparator) state.accountSeparator = String(job.accountSeparator || "|");
+        if (typeof job.enableNsfw === "boolean") state.enableNsfw = job.enableNsfw;
+        if (job.targets) state.targets = normalizeTargets(job.targets);
+        if (job.given) state.given = String(job.given || "");
+        if (job.family) state.family = String(job.family || "");
+        if (job.code) state.code = String(job.code || "");
+        if (job.sso) state.sso = String(job.sso || state.sso || "");
+        if (job.userId) state.userId = String(job.userId || state.userId || "");
+        if (job.cloudflareCookies) state.cloudflareCookies = String(job.cloudflareCookies || state.cloudflareCookies || "");
+      }
+
+      // Full pipeline after register:
+      // 1) wait redirect/login cookies (sso/cf/x-userid)
+      // 2) optional NSFW on grok
+      // 3) if CPA/Grok2Api checked -> device OAuth authorize
+      // 4) write account/cpa/grok2api/sso files
+      if (job && job.oauthToken) state.oauthToken = job.oauthToken;
+      if (job && job.deviceOauth) state.deviceOauth = job.deviceOauth;
+      if (job && job.oauthError) state.oauthError = String(job.oauthError || "");
+
+      const targets = normalizeTargets(state.targets);
+      const needOauth = Boolean(targets.cpa || targets.grok2api);
+      const alreadyHasOauth = Boolean(state.oauthToken && state.oauthToken.access_token);
+
+      setPhase("post_success", `后处理中 (${reason})：等待登录…`);
+      // Source of truth: grok.com cookies sso / cf_clearance / x-userid (HttpOnly via worker).
+      // Do NOT start OAuth before login/SSO is ready, otherwise device page bounces to sign-in.
+      let harvest = { sso: "", cloudflareCookies: "", userId: "", cfClearance: "", nsfw: null };
+      const maxWaitRounds = needOauth && !alreadyHasOauth ? 40 : 25;
+      for (let i = 0; i < maxWaitRounds; i += 1) {
+        assertRunning(token);
+        // On device-oauth pages we only need cookies if missing; skip NSFW here.
+        harvest = await harvestPostRegister(token, {
+          skipNsfw: isDeviceOauthPage() || alreadyHasOauth || Boolean(state.nsfw && state.nsfw.ok),
+        });
+        if (harvest.sso) break;
+        if (looksActuallyLoggedIn() || /grok\.com/i.test(location.href)) {
+          await sleepCancellable(token, 500);
+          continue;
+        }
+        // Still on accounts signup/credentials intermediate: wait redirect instead of forcing OAuth.
+        await sleepCancellable(token, 400);
+      }
+
+      state.sso = harvest.sso || state.sso || "";
+      state.cloudflareCookies = harvest.cloudflareCookies || state.cloudflareCookies || "";
+      state.userId = harvest.userId || state.userId || "";
+      if (harvest.nsfw) state.nsfw = harvest.nsfw;
+      pageLog(`session cookies sso=${state.sso ? "yes" : "no"} userId=${state.userId || "-"} cf=${harvest.cfClearance ? "yes" : "no"} cloudflare=${state.cloudflareCookies ? "yes" : "no"} needOauth=${needOauth}`);
+
+      if (!state.email) throw new Error("后处理缺少 email");
+      if (!state.storagePath) throw new Error("后处理缺少 storagePath");
+
+      // Keep finalize pending until login is ready when OAuth is required.
+      if (needOauth && !alreadyHasOauth && !state.sso && !isDeviceOauthPage()) {
+        await savePendingJob(buildPendingJob("finalize", {
+          reason: "wait-login-before-oauth",
+          waitedAt: new Date().toISOString(),
+        }));
+        setStatus("等待 Grok 登录完成", "注册后重定向登录中；登录成功后自动继续 OAuth");
+        pageLog("defer device oauth: sso not ready yet");
+        return;
+      }
+
+      // Optional NSFW only when we have a grok/logged-in page and not done yet.
+      if (state.enableNsfw && !(state.nsfw && state.nsfw.ok) && !isDeviceOauthPage()) {
+        setStatus("开启 NSFW", "birth-date + feature controls");
+        try {
+          state.nsfw = await enableNsfwInPage(state.sso);
+        } catch (error) {
+          state.nsfw = { ok: false, error: error && error.message ? error.message : String(error) };
+          pageLog(`nsfw failed: ${state.nsfw.error}`);
+        }
+      }
+
+      const summary = {
+        ok: true,
+        email: state.email,
+        password: state.password,
+        given: state.given,
+        family: state.family,
+        code: state.code,
+        storagePath: String(state.storagePath || ""),
+        accountSeparator: String(state.accountSeparator || "|") || "|",
+        targets,
+        enableNsfw: Boolean(state.enableNsfw),
+        sso: state.sso,
+        cloudflareCookies: state.cloudflareCookies,
+        userId: state.userId,
+        nsfw: state.nsfw,
+        oauthToken: state.oauthToken || null,
+        oauthError: state.oauthError || "",
+        deviceSession: state.deviceOauth || null,
+        url: location.href,
+        finalizeReason: reason,
+      };
+
+      // Device-code OAuth only when CPA / Grok2Api checked.
+      if (needOauth) {
+        if (alreadyHasOauth) {
+          summary.oauthToken = state.oauthToken;
+          summary.deviceSession = state.deviceOauth || null;
+        } else {
+          setPhase("device_oauth", "CPA/Grok2Api：设备码 OAuth…");
+          const oauth = await completeDeviceOauthFlow(token, {
+            email: state.email,
+            sso: state.sso,
+          });
+          if (oauth && oauth.token) {
+            state.oauthToken = oauth.token;
+            state.oauthError = "";
+            summary.oauthToken = oauth.token;
+            summary.oauthError = "";
+            summary.deviceSession = oauth.deviceSession || state.deviceOauth || null;
+          } else if (oauth && oauth.pending) {
+            // Navigating to device page; durable device-oauth job already saved.
+            setStatus("等待设备授权", oauth.message || "已打开设备授权页，授权后自动写文件");
+            return;
+          } else {
+            state.oauthError = (oauth && oauth.error) || "OAuth 未完成";
+            summary.oauthError = state.oauthError;
+            pageLog(`oauth failed: ${state.oauthError}`);
+          }
+        }
+      } else {
+        pageLog("skip device oauth: CPA/Grok2Api not selected");
+      }
+
+      setStatus(needOauth ? "写入账号 / OAuth 文件…" : "写入账号文件…", summarizeState());
+      const saved = await requestWorker("grok-register:result", summary, 120000);
+      await clearPendingJob();
+
+      state.ok = true;
+      state.phase = "done";
+      state.phaseLabel = "注册成功";
+      state.finishedAt = Date.now();
+      state.lastResult = {
+        ok: true,
+        email: state.email,
+        password: state.password,
+        given: state.given,
+        family: state.family,
+        targets: normalizeTargets(state.targets),
+        sso: state.sso,
+        finishedAt: state.finishedAt,
+      };
+      if (saved && saved.path) {
+        state.lastSavedPath = String(saved.path);
+        summary.savedPath = state.lastSavedPath;
+      }
+      saveState();
+      setResult(JSON.stringify(summary, null, 2));
+      setStatus("注册成功", state.lastSavedPath ? `${state.email} → ${state.lastSavedPath}` : state.email);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      if (message !== "stopped") {
+        state.error = message;
+        setStatus("后处理未完成", message + "（pending-job 仍保留，可刷新重试）");
+      }
+      throw error;
+    } finally {
+      if (ownsRun) {
+        controller.running = false;
+        refreshPanel();
+      }
+    }
+  }
+
+  async function completeDeviceOauthFlow(token, options) {
+    assertRunning(token);
+    const email = String((options && options.email) || state.email || "");
+    const sso = String((options && options.sso) || state.sso || "");
+
+    // If we already have a token from a previous resume, reuse it.
+    if (state.oauthToken && state.oauthToken.access_token) {
+      return { token: state.oauthToken, deviceSession: state.deviceOauth || null };
+    }
+
+    // If already on device authorize pages after navigation, finish UI + poll.
+    if (isDeviceOauthPage()) {
+      return finishDeviceOauthOnPage(token, state.deviceOauth || null);
+    }
+
+    if (!sso && !looksActuallyLoggedIn()) {
+      return { error: "登录未完成，暂不启动设备授权" };
+    }
+
+    setStatus("启动设备授权", "申请 device_code / user_code…");
+    const started = await requestWorker("grok-register:start-device-oauth", {
+      email,
+      sso,
+    }, 30000);
+    const deviceSession = {
+      device_code: String(started.device_code || ""),
+      user_code: String(started.user_code || ""),
+      verification_uri: String(started.verification_uri || "https://accounts.x.ai/oauth2/device"),
+      verification_uri_complete: String(started.verification_uri_complete || ""),
+      expires_in: Number(started.expires_in || 1800),
+      interval: Number(started.interval || 5),
+      email,
+      sso,
+    };
+    if (!deviceSession.device_code || !deviceSession.user_code) {
+      return { error: "device code incomplete" };
+    }
+    if (!deviceSession.verification_uri_complete) {
+      deviceSession.verification_uri_complete = `${deviceSession.verification_uri}?user_code=${encodeURIComponent(deviceSession.user_code)}`;
+    }
+    state.deviceOauth = deviceSession;
+    pageLog(`device oauth user_code=${deviceSession.user_code}`);
+
+    // Durable job so redirect/reload continues.
+    await savePendingJob(buildPendingJob("device-oauth", {
+      deviceOauth: deviceSession,
+      reason: "device-oauth-start",
+    }));
+
+    // If we are already on a usable accounts page in same session, navigate.
+    setStatus("打开设备授权页", deviceSession.user_code);
+    location.href = deviceSession.verification_uri_complete;
+    return {
+      pending: true,
+      message: `user_code=${deviceSession.user_code}`,
+      deviceSession,
+    };
+  }
+
+  async function resumeDeviceOauth(job) {
+    if (controller.running) return;
+    controller.running = true;
+    controller.stopRequested = false;
+    controller.runToken += 1;
+    const token = controller.runToken;
+    try {
+      if (job) {
+        if (job.email) state.email = String(job.email || state.email || "");
+        if (job.password) state.password = String(job.password || state.password || "");
+        if (job.storagePath) state.storagePath = String(job.storagePath || state.storagePath || "");
+        if (job.accountSeparator) state.accountSeparator = String(job.accountSeparator || "|");
+        if (typeof job.enableNsfw === "boolean") state.enableNsfw = job.enableNsfw;
+        if (job.targets) state.targets = normalizeTargets(job.targets);
+        if (job.sso) state.sso = String(job.sso || state.sso || "");
+        if (job.userId) state.userId = String(job.userId || state.userId || "");
+        if (job.cloudflareCookies) state.cloudflareCookies = String(job.cloudflareCookies || state.cloudflareCookies || "");
+        if (job.deviceOauth) state.deviceOauth = job.deviceOauth;
+        if (job.oauthToken) state.oauthToken = job.oauthToken;
+      }
+
+      setPhase("device_oauth", "设备授权页：继续/允许…");
+      const oauth = await finishDeviceOauthOnPage(token, state.deviceOauth || (job && job.deviceOauth) || null);
+      if (oauth && oauth.token) {
+        state.oauthToken = oauth.token;
+        state.oauthError = "";
+        pageLog("device oauth complete, continue save pipeline");
+      } else if (oauth && oauth.pending) {
+        setStatus("等待设备授权", oauth.message || "授权未完成");
+        return;
+      } else {
+        state.oauthError = (oauth && oauth.error) || "设备授权失败";
+        pageLog(`device oauth failed: ${state.oauthError}`);
+      }
+
+      // Continue full pipeline: write account + cpa/grok2api/sso using acquired token.
+      await finalizeAfterRegister("device-oauth-done", {
+        ...(job || {}),
+        oauthToken: state.oauthToken,
+        oauthError: state.oauthError,
+        deviceOauth: state.deviceOauth,
+      }, token);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      if (message !== "stopped") {
+        state.error = message;
+        setStatus("设备授权未完成", message);
+      }
+    } finally {
+      controller.running = false;
+      refreshPanel();
+    }
+  }
+
+  function isDeviceOauthPage() {
+    const href = String(location.href || "");
+    return /accounts\.x\.ai|auth\.x\.ai/i.test(href) && /oauth2\/device/i.test(href);
+  }
+
+  function detectDeviceOauthMode() {
+    const href = String(location.href || "");
+    const text = pageText();
+    if (/device\/done/i.test(href) || /设备已授权|您的设备已获授权|device authorized|device is authorized/i.test(text)) {
+      return "done";
+    }
+    if (/Invalid action/i.test(text) && (/device\/approve/i.test(href) || !document.querySelector("form"))) {
+      return "invalid-action";
+    }
+    if (
+      /device\/consent/i.test(href)
+      || document.querySelector('form[action*="device/approve"] input[name="action"]')
+      || (/授权 Grok Build|Authorize — Grok|Authorize Grok Build|Verify your identity/i.test(text)
+        && document.querySelector('form[action*="device/approve"]'))
+    ) {
+      return "consent";
+    }
+    if (
+      document.querySelector('form[action*="device/verify"]')
+      || document.querySelector('input[name="user_code"]')
+      || /登录 Grok Build|输入终端中显示的代码|Enter the code displayed/i.test(text)
+    ) {
+      return "verify";
+    }
+    if (/\/sign-in\b/i.test(href)) return "sign-in";
+    if (/oauth2\/device/i.test(href)) return "device";
+    return "other";
+  }
+
+  function isJarvisPanelNode(node) {
+    return Boolean(node && node.closest && node.closest("#grok-email-register-panel"));
+  }
+
+  function isCookieBannerNode(node) {
+    if (!node) return false;
+    if (node.closest && node.closest("#onetrust-banner-sdk, #onetrust-pc-sdk, .onetrust-pc-dark-filter, #ot-sdk-cookie-policy")) {
+      return true;
+    }
+    const id = String(node.id || "");
+    const cls = String(node.className || "");
+    return /onetrust|ot-pc|ot-group|cookiepedia|accept-recommended|close-pc-btn|filter-btn-handler/i.test(`${id} ${cls}`);
+  }
+
+  function findDeviceOauthClickable(patterns) {
+    const nodes = Array.from(document.querySelectorAll("button, a, [role='button'], input[type='submit']"));
+    for (const pattern of patterns) {
+      const re = typeof pattern === "string" ? new RegExp(pattern, "i") : pattern;
+      for (const node of nodes) {
+        if (isJarvisPanelNode(node) || isCookieBannerNode(node)) continue;
+        const text = String(node.innerText || node.textContent || node.value || "").replace(/\s+/g, " ").trim();
+        if (!text) continue;
+        if (re.test(text) && visible(node) && !node.disabled) return node;
+      }
+    }
+    return null;
+  }
+
+  async function dismissCookieBannerIfAny(token) {
+    const allowAll = findClickableByText([/全部允许/i, /Accept All/i, /Allow all/i]);
+    if (allowAll && !isJarvisPanelNode(allowAll)) {
+      await clickEl(allowAll);
+      await sleepCancellable(token || controller.runToken, 350);
+    }
+  }
+
+  async function submitDeviceVerifyForm(deviceSession) {
+    const form = document.querySelector('form[action*="device/verify"]');
+    if (!form) return false;
+    const codeInput = form.querySelector('input[name="user_code"]') || document.querySelector('input[name="user_code"]');
+    if (codeInput && deviceSession && deviceSession.user_code) {
+      const current = String(codeInput.value || "").trim();
+      if (current !== String(deviceSession.user_code)) {
+        await setInputValue(codeInput, String(deviceSession.user_code));
+      }
+    }
+    pageLog("device oauth submit verify form");
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.submit();
+    return true;
+  }
+
+  async function submitDeviceApproveAllow(deviceSession) {
+    const form = document.querySelector('form[action*="device/approve"]');
+    if (!form) return false;
+
+    // Real consent page keeps hidden action empty until JS sets allow/deny.
+    // Blind-clicking 允许 without writing action=allow posts Invalid action.
+    let userCodeInput = form.querySelector('input[name="user_code"]');
+    if (!userCodeInput) {
+      userCodeInput = document.createElement("input");
+      userCodeInput.type = "hidden";
+      userCodeInput.name = "user_code";
+      form.appendChild(userCodeInput);
+    }
+    if (deviceSession && deviceSession.user_code) {
+      userCodeInput.value = String(deviceSession.user_code);
+    }
+
+    let actionInput = form.querySelector('input[name="action"]');
+    if (!actionInput) {
+      actionInput = document.createElement("input");
+      actionInput.type = "hidden";
+      actionInput.name = "action";
+      form.appendChild(actionInput);
+    }
+    actionInput.value = "allow";
+
+    let principalType = form.querySelector('input[name="principal_type"]');
+    if (!principalType) {
+      principalType = document.createElement("input");
+      principalType.type = "hidden";
+      principalType.name = "principal_type";
+      form.appendChild(principalType);
+    }
+    if (!String(principalType.value || "").trim()) principalType.value = "User";
+
+    let principalId = form.querySelector('input[name="principal_id"]');
+    if (!principalId) {
+      principalId = document.createElement("input");
+      principalId.type = "hidden";
+      principalId.name = "principal_id";
+      form.appendChild(principalId);
+    }
+    if (principalId.value == null) principalId.value = "";
+
+    pageLog("device oauth submit approve action=allow");
+    // Prefer explicit form submit after fixing fields; button-only click leaves action empty.
+    if (typeof form.requestSubmit === "function") form.requestSubmit();
+    else form.submit();
+    return true;
+  }
+
+  async function finishDeviceOauthOnPage(token, deviceSession) {
+    assertRunning(token);
+    deviceSession = deviceSession || state.deviceOauth || null;
+    if (!deviceSession || !deviceSession.device_code) {
+      // Try recover from URL user_code only is not enough for token poll.
+      return { error: "缺少 device_code，无法轮询 token" };
+    }
+
+    let mode = detectDeviceOauthMode();
+    // Dead-end approve error page: reopen verification URI once.
+    if (mode === "invalid-action") {
+      pageLog("device oauth invalid-action; reopen verification uri");
+      const url = deviceSession.verification_uri_complete
+        || `${deviceSession.verification_uri || "https://accounts.x.ai/oauth2/device"}?user_code=${encodeURIComponent(deviceSession.user_code || "")}`;
+      await savePendingJob(buildPendingJob("device-oauth", {
+        deviceOauth: deviceSession,
+        reason: "device-oauth-invalid-action-reopen",
+      }));
+      location.href = url;
+      return { pending: true, message: "Invalid action，重新打开设备授权页", deviceSession };
+    }
+
+    // Ensure we are on device UI; if not, navigate once.
+    if (!isDeviceOauthPage()) {
+      const url = deviceSession.verification_uri_complete
+        || `${deviceSession.verification_uri || "https://accounts.x.ai/oauth2/device"}?user_code=${encodeURIComponent(deviceSession.user_code || "")}`;
+      await savePendingJob(buildPendingJob("device-oauth", {
+        deviceOauth: deviceSession,
+        reason: "device-oauth-reopen",
+      }));
+      location.href = url;
+      return { pending: true, message: "跳转设备授权页", deviceSession };
+    }
+
+    setStatus("设备授权", `user_code=${deviceSession.user_code || ""}`);
+    const ui = await interactDeviceOauthUi(token, deviceSession);
+    mode = detectDeviceOauthMode();
+    if (mode === "invalid-action") {
+      return { error: "设备授权页 Invalid action：consent 未带 action=allow。已修复逻辑，请重跑后处理/注册", deviceSession };
+    }
+    if (!ui && mode !== "done") {
+      pageLog(`device oauth UI not confirmed mode=${mode}; still try token poll`);
+    }
+
+    // Poll token after UI approve / continue.
+    setStatus("轮询 OAuth Token", deviceSession.user_code || "");
+    try {
+      const polled = await requestWorker("grok-register:poll-device-oauth", {
+        device_code: deviceSession.device_code,
+        interval: deviceSession.interval || 5,
+        expires_in: deviceSession.expires_in || 1800,
+        timeoutMs: 120000,
+      }, 130000);
+      const tokenPayload = polled && polled.token ? polled.token : polled;
+      if (!tokenPayload || !tokenPayload.access_token) {
+        return { error: "轮询 token 失败：无 access_token", deviceSession };
+      }
+      state.oauthToken = tokenPayload;
+      pageLog("device oauth token acquired");
+      return { token: tokenPayload, deviceSession };
+    } catch (error) {
+      return {
+        error: error && error.message ? error.message : String(error),
+        deviceSession,
+      };
+    }
+  }
+
+  async function interactDeviceOauthUi(token, deviceSession) {
+    assertRunning(token);
+    await dismissCookieBannerIfAny(token);
+
+    const deadline = Date.now() + 45000;
+    let lastMode = "";
+    while (Date.now() < deadline) {
+      assertRunning(token);
+      const mode = detectDeviceOauthMode();
+      if (mode !== lastMode) {
+        pageLog(`device oauth mode=${mode} href=${location.href}`);
+        lastMode = mode;
+      }
+
+      if (mode === "done") {
+        pageLog("device oauth approved");
+        return true;
+      }
+
+      if (mode === "sign-in") {
+        throw new Error("设备授权页要求登录：注册登录尚未完成或当前标签无 SSO。请等跳转到 grok.com 登录完成后再继续");
+      }
+
+      if (mode === "invalid-action") {
+        throw new Error("设备授权 Invalid action：consent 提交缺少 action=allow");
+      }
+
+      if (mode === "verify") {
+        const codeInput = document.querySelector('input[name="user_code"]');
+        if (codeInput && deviceSession && deviceSession.user_code) {
+          const current = String(codeInput.value || "").trim();
+          if (current !== String(deviceSession.user_code)) {
+            await setInputValue(codeInput, String(deviceSession.user_code));
+          }
+        }
+        const submitted = await submitDeviceVerifyForm(deviceSession);
+        if (!submitted) {
+          const cont = findDeviceOauthClickable([/^继续$/, /^Continue$/i]);
+          if (cont) {
+            pageLog("device oauth click: 继续");
+            await clickEl(cont);
+          }
+        }
+        await sleepCancellable(token, 900);
+        continue;
+      }
+
+      if (mode === "consent") {
+        const submitted = await submitDeviceApproveAllow(deviceSession);
+        if (!submitted) {
+          // Fallback: set action then click the Allow button only (never 拒绝).
+          const actionInput = document.querySelector('form[action*="device/approve"] input[name="action"]');
+          if (actionInput) actionInput.value = "allow";
+          const allowBtn = findDeviceOauthClickable([
+            /^允许$/,
+            /^授权$/,
+            /^同意$/,
+            /^Authorize$/i,
+            /^Allow$/i,
+            /^Approve$/i,
+          ]);
+          if (allowBtn) {
+            pageLog(`device oauth click allow: ${String(allowBtn.innerText || "").trim() || "allow"}`);
+            await clickEl(allowBtn);
+          }
+        }
+        await sleepCancellable(token, 1100);
+        continue;
+      }
+
+      // Intermediate device page: try verify/consent forms if present, else wait.
+      if (document.querySelector('form[action*="device/verify"]')) {
+        await submitDeviceVerifyForm(deviceSession);
+        await sleepCancellable(token, 900);
+        continue;
+      }
+      if (document.querySelector('form[action*="device/approve"]')) {
+        await submitDeviceApproveAllow(deviceSession);
+        await sleepCancellable(token, 1100);
+        continue;
+      }
+
+      await sleepCancellable(token, 700);
+    }
+
+    if (detectDeviceOauthMode() === "done") return true;
+    pageLog("device oauth UI interaction timed out; still try token poll");
+    return false;
+  }
+
+  async function harvestPostRegister(token, options) {
+    assertRunning(token);
+
+    // document.cookie cannot see HttpOnly cookies (sso / cf_clearance often HttpOnly).
+    // Prefer Electron session cookies via worker: sso, cf_clearance, x-userid.
+    let sso = (options && options.ssoHint) || readCookie("sso") || readCookie("sso-rw") || "";
+    let userId = readCookie("x-userid") || readCookie("x_userid") || "";
+    let cfClearance = readCookie("cf_clearance") || "";
+    let cloudflareCookies = collectCloudflareCookies();
+
+    try {
+      const res = await requestWorker("grok-register:get-session-cookies", {
+        sso,
+        userId,
+      }, 15000);
+      if (res) {
+        if (res.sso) sso = String(res.sso || sso);
+        if (res.userId) userId = String(res.userId || userId);
+        if (res.cfClearance) cfClearance = String(res.cfClearance || cfClearance);
+        if (res.cloudflareCookies) cloudflareCookies = String(res.cloudflareCookies || cloudflareCookies);
+      }
+    } catch (error) {
+      pageLog(`get-session-cookies failed: ${error && error.message ? error.message : error}`);
+    }
+
+    // Fallback page/local extraction for user id only.
+    if (!userId) {
+      try { userId = extractUserIdFromPage() || ""; } catch (_e) {}
+    }
+    if (!cloudflareCookies && cfClearance) {
+      cloudflareCookies = `cf_clearance=${cfClearance}`;
+    }
+
+    let nsfw = null;
+    const skipNsfw = Boolean(options && options.skipNsfw);
+    if (state.enableNsfw && !skipNsfw) {
+      setStatus("开启 NSFW", "birth-date + feature controls");
+      nsfw = await enableNsfwInPage(sso);
+    }
+
+    return {
+      sso,
+      userId,
+      cfClearance,
+      cloudflareCookies,
+      nsfw,
+    };
+  }
+
+  function readCookie(name) {
+    const target = String(name || "");
+    const parts = String(document.cookie || "").split(/;\s*/);
+    for (const part of parts) {
+      const idx = part.indexOf("=");
+      if (idx < 0) continue;
+      const key = part.slice(0, idx);
+      if (key === target || key.toLowerCase() === target.toLowerCase()) {
+        try {
+          return decodeURIComponent(part.slice(idx + 1));
+        } catch (_e) {
+          return part.slice(idx + 1);
+        }
+      }
+    }
+    return "";
+  }
+
+  function collectCloudflareCookies() {
+    // Non-HttpOnly fallback only; real cf_clearance usually comes from worker session cookies.
+    const wanted = ["cf_clearance", "__cf_bm", "cf_chl_2", "cf_chl_rc_i", "cf_chl_rc_ni", "cf_chl_rc_m"];
+    const pairs = [];
+    for (const name of wanted) {
+      const value = readCookie(name);
+      if (value) pairs.push(`${name}=${value}`);
+    }
+    return pairs.join("; ");
+  }
+
+  function extractUserIdFromPage() {
+    // Cookie first (also checked by caller), then page state.
+    const fromCookie = readCookie("x-userid") || readCookie("x_userid");
+    if (fromCookie) return fromCookie;
+    const sources = [];
+    try { sources.push(JSON.stringify(window.__NEXT_DATA__ || {})); } catch (_e) {}
+    try { sources.push(localStorage.getItem("user") || ""); } catch (_e) {}
+    try { sources.push(sessionStorage.getItem("user") || ""); } catch (_e) {}
+    const blob = sources.join("\n");
+    const m = blob.match(/"user_id"\s*:\s*"([^"]+)"/i)
+      || blob.match(/"userId"\s*:\s*"([^"]+)"/i)
+      || blob.match(/"sub"\s*:\s*"([0-9a-f-]{16,})"/i);
+    return m ? m[1] : "";
+  }
+
+  async function enableNsfwInPage(sso) {
+    const result = {
+      ok: false,
+      at: "",
+      birthAt: "",
+      steps: [],
+      error: "",
+    };
+    try {
+      // birth date
+      const birthDate = randomBirthDate();
+      const birthRes = await fetch("https://grok.com/rest/auth/set-birth-date", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://grok.com",
+          referer: "https://grok.com/",
+        },
+        body: JSON.stringify({ birthDate }),
+      });
+      const birthText = await birthRes.text();
+      if (birthRes.ok || /birth-date-change-limit-reached|Birth date is locked|already set/i.test(birthText)) {
+        result.birthAt = new Date().toISOString();
+        result.steps.push("birth-ok");
+      } else {
+        result.steps.push(`birth-http-${birthRes.status}`);
+      }
+
+      // feature control via grpc-web binary
+      const payload = buildNsfwGrpcBody();
+      const nsfwRes = await fetch("https://grok.com/auth_mgmt.AuthManagement/UpdateUserFeatureControls", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/grpc-web+proto",
+          "x-grpc-web": "1",
+          origin: "https://grok.com",
+          referer: "https://grok.com/",
+        },
+        body: payload,
+      });
+      if (nsfwRes.ok) {
+        result.ok = true;
+        result.at = new Date().toISOString();
+        result.steps.push("nsfw-ok");
+      } else {
+        result.steps.push(`nsfw-http-${nsfwRes.status}`);
+        result.error = `nsfw http ${nsfwRes.status}`;
+      }
+    } catch (error) {
+      result.error = error && error.message ? error.message : String(error);
+      result.steps.push("exception");
+    }
+    return result;
+  }
+
+  function randomBirthDate() {
+    const age = 22 + Math.floor(Math.random() * 18);
+    const year = new Date().getUTCFullYear() - age;
+    const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, "0");
+    const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, "0");
+    return `${year}-${month}-${day}T16:00:00.000Z`;
+  }
+
+  function buildNsfwGrpcBody() {
+    const field1Content = new Uint8Array([0x10, 0x01]);
+    const field1 = new Uint8Array(2 + field1Content.length);
+    field1[0] = 0x0a; field1[1] = field1Content.length; field1.set(field1Content, 2);
+    const nsfwString = new TextEncoder().encode("always_show_nsfw_content");
+    const field2Inner = new Uint8Array(2 + nsfwString.length);
+    field2Inner[0] = 0x0a; field2Inner[1] = nsfwString.length; field2Inner.set(nsfwString, 2);
+    const field2 = new Uint8Array(2 + field2Inner.length);
+    field2[0] = 0x12; field2[1] = field2Inner.length; field2.set(field2Inner, 2);
+    const payload = new Uint8Array(field1.length + field2.length);
+    payload.set(field1, 0); payload.set(field2, field1.length);
+    const out = new Uint8Array(5 + payload.length);
+    out[0] = 0;
+    out[1] = (payload.length >>> 24) & 255;
+    out[2] = (payload.length >>> 16) & 255;
+    out[3] = (payload.length >>> 8) & 255;
+    out[4] = payload.length & 255;
+    out.set(payload, 5);
+    return out;
+  }
 
   function makePassword() {
     // kept only for manual debug; registration never auto-uses this
@@ -1093,32 +2123,33 @@
     const mode = detectPageMode();
     const href = String(location.href || "");
 
-    if (mode === "done" || mode === "verify" || mode === "credentials") return;
+    if (mode === "verify" || mode === "credentials") return;
     if (mode === "sign-up" || mode === "sign-up-email") return;
+    if (/accounts\.x\.ai/i.test(href) && /\/sign-up\b/i.test(href)) return;
 
-    // On sign-in: go to sign-up via link or hard navigation.
-    if (mode === "sign-in" || /\/sign-in\b/i.test(href)) {
-      setPhase("goto_signup", "当前是登录页，切换到注册...");
-      const link =
-        document.querySelector('a[href*="sign-up"]')
-        || findClickableByText([/^注册$/, /没有账户.*注册/, /Sign up$/i, /Create account/i, /Don't have an account/i]);
-      if (link) {
-        await clickEl(link);
-        await sleepCancellable(token, 1200);
-      } else {
-        location.href = "https://accounts.x.ai/sign-up?redirect=grok-com";
-        await sleepCancellable(token, 2000);
-      }
-      await waitFor(
-        token,
-        () => {
-          const m = detectPageMode();
-          return m === "sign-up" || m === "sign-up-email" || m === "verify" || m === "credentials" || /\/sign-up\b/i.test(location.href);
-        },
-        20000,
-        "navigate to sign-up",
-      );
+    // Not on signup flow (e.g. grok.com / sign-in / unknown): go signup.
+    setPhase("goto_signup", "不在注册页，跳转到注册…");
+    const link =
+      document.querySelector('a[href*="sign-up"]')
+      || findClickableByText([/^注册$/, /没有账户.*注册/, /Sign up$/i, /Create account/i, /Don't have an account/i, /使用邮箱注册/i]);
+    if (link && /accounts\.x\.ai|grok\.com/i.test(href)) {
+      await clickEl(link);
+      await sleepCancellable(token, 1200);
     }
+    if (!isOnSignupFlow()) {
+      // Durable start job so reload continues.
+      await savePendingJob(buildPendingJob("start", { reason: "ensure-signup" }));
+      location.href = SIGNUP_URL;
+      // Navigation destroys page; keep waiting until stop/unload.
+      await sleepCancellable(token, 15000);
+      throw new Error("stopped");
+    }
+    await waitFor(
+      token,
+      () => isOnSignupFlow(),
+      20000,
+      "navigate to sign-up",
+    );
   }
 
   async function dismissBanners() {
@@ -1428,6 +2459,16 @@
   }
 
   async function submitCompleteSignup() {
+    // Save finalize job before form submit triggers redirect/login.
+    try {
+      await savePendingJob(buildPendingJob("finalize", {
+        reason: "pre-submit",
+        submittedAt: new Date().toISOString(),
+      }));
+      setStatus("已保存后处理任务", "提交注册后即使重定向也会续跑 SSO/OAuth");
+    } catch (error) {
+      pageLog(`save pending finalize failed: ${error && error.message ? error.message : error}`);
+    }
     const btn = findClickableByText([
       /Complete sign up/i,
       /Complete your sign up/i,
@@ -1460,14 +2501,20 @@
   }
 
   async function waitForSuccess(token, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Date.now() + Math.min(timeoutMs || 90000, 20000);
     while (Date.now() < deadline) {
       assertRunning(token);
       if (looksRegistered()) return true;
-      // Still on guest grok.com after submit is NOT success.
-      await sleepCancellable(token, 800);
+      if (readCookie("sso")) return true;
+      // Leaving credentials page often means redirect started.
+      const mode = detectPageMode();
+      if (mode !== "credentials" && mode !== "verify" && mode !== "sign-up-email") {
+        // soft success; finalize will confirm via cookies/job
+        return true;
+      }
+      await sleepCancellable(token, 400);
     }
-    if (looksRegistered()) return true;
-    throw new Error("submit finished but login success not detected（页面仍像未登录）");
+    // Don't fail hard: pending finalize job can complete after redirect.
+    return true;
   }
 })();

@@ -406,6 +406,11 @@ export class JarvisScriptRuntime {
       return this.handleFsReadText(message.payload);
     }
 
+    if (message.method === "session:get-cookies") {
+      this.assertPermission(script, "session");
+      return this.handleGetCookies(script, message.payload);
+    }
+
     throw new Error(`不支持的 Jarvis Script RPC：${message.method}`);
   }
 
@@ -465,6 +470,38 @@ export class JarvisScriptRuntime {
   private async handleFsReadText(payload?: Record<string, unknown>) {
     const targetPath = this.resolveAbsoluteFsPath(payload?.path);
     return readFile(targetPath, "utf8");
+  }
+
+  private async handleGetCookies(script: JarvisScript, payload?: Record<string, unknown>) {
+    const context = this.options.resolveRequestContext({
+      siteId: typeof payload?.siteId === "string" ? payload.siteId : script.siteId,
+      sessionId: typeof payload?.sessionId === "string" ? payload.sessionId : undefined,
+    });
+
+    const filter: Electron.CookiesGetFilter = {};
+    if (typeof payload?.url === "string" && payload.url.trim()) {
+      filter.url = payload.url.trim();
+    }
+    if (typeof payload?.domain === "string" && payload.domain.trim()) {
+      filter.domain = payload.domain.trim();
+    }
+    if (typeof payload?.name === "string" && payload.name.trim()) {
+      filter.name = payload.name.trim();
+    }
+
+    const cookies = await context.session.cookies.get(filter);
+    return cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      session: cookie.session,
+      expirationDate: cookie.expirationDate,
+      sameSite: cookie.sameSite,
+      hostOnly: cookie.hostOnly,
+    }));
   }
 
   private async handleHttpRequest(script: JarvisScript, payload?: Record<string, unknown>) {

@@ -1,4 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
+import { webcrypto } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { Script, createContext } from "node:vm";
@@ -34,6 +35,14 @@ export interface JarvisScriptWorkerApi {
     defaultPath?: string;
     buttonLabel?: string;
   }): Promise<{ canceled: boolean; path?: string }>;
+  /** Read cookies from the current Electron session (requires permission `session`). */
+  getCookies(filter?: {
+    url?: string;
+    domain?: string;
+    name?: string;
+    siteId?: string;
+    sessionId?: string;
+  }): Promise<Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean }>>;
   log(message: string): void;
   request(input: string | URL, init?: RequestInit): Promise<unknown>;
   openWebSocket(url: string): WebSocket;
@@ -79,6 +88,16 @@ const api: JarvisScriptWorkerApi = {
       defaultPath: options?.defaultPath,
       buttonLabel: options?.buttonLabel,
     }) as Promise<{ canceled: boolean; path?: string }>;
+  },
+  getCookies: async (filter) => {
+    assertPermission("session");
+    return rpc("session:get-cookies", {
+      url: filter?.url,
+      domain: filter?.domain,
+      name: filter?.name,
+      siteId: filter?.siteId,
+      sessionId: filter?.sessionId,
+    }) as Promise<Array<{ name: string; value: string; domain?: string; path?: string; httpOnly?: boolean; secure?: boolean }>>;
   },
   log: (message) => parentPort?.postMessage({ type: "jarvis-script:log", message }),
   request: async (input, init) => {
@@ -205,6 +224,9 @@ async function loadScriptModule() {
     URLSearchParams,
     TextDecoder,
     TextEncoder,
+    crypto: webcrypto,
+    btoa: (value: string) => Buffer.from(value, "binary").toString("base64"),
+    atob: (value: string) => Buffer.from(value, "base64").toString("binary"),
   });
   new Script(source, { filename: data.entry }).runInContext(context);
   return ((context.module as { exports?: ScriptModule }).exports ?? moduleExports) as ScriptModule;
