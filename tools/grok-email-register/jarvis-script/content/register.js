@@ -1017,7 +1017,7 @@
       } else if (mode === "verify") {
         await ensureCode(token);
         await fillAndConfirmCode(state.code);
-        await waitForMode(token, ["credentials", "done"], 45000, "credentials after code");
+        await waitCredentialsAfterCode(token, 45000);
         if (detectPageMode() === "credentials") {
           await fillCredentials(state.given, state.family, state.password);
           await maybeWaitTurnstile(token, "credentials");
@@ -2292,8 +2292,94 @@
     return state.code;
   }
 
+  function ensureVerifyNetworkProbe() {
+    if (window.__grokVerifyProbeInstalled) return;
+    window.__grokVerifyProbeInstalled = true;
+    window.__grokVerifyLast = null;
+    const remember = (item) => {
+      try {
+        window.__grokVerifyLast = item;
+        pageLog(`verify-net ${item.status || "-"} ${item.grpcStatus || "-"} ${item.message || item.url || ""}`.slice(0, 220));
+      } catch (_e) {}
+    };
+    const decodeGrpcMessage = (raw) => {
+      try {
+        return decodeURIComponent(String(raw || "")).replace(/\+/g, " ");
+      } catch (_e) {
+        return String(raw || "");
+      }
+    };
+    const origFetch = window.fetch;
+    if (typeof origFetch === "function") {
+      window.fetch = async function (...args) {
+        const input = args[0];
+        const init = args[1] || {};
+        const url = String(input && input.url ? input.url : input);
+        const resp = await origFetch.apply(this, args);
+        if (/VerifyEmailValidationCode|AuthManagement\/Verify/i.test(url)) {
+          const grpcStatus = resp.headers.get("grpc-status") || resp.headers.get("Grpc-Status") || "";
+          const grpcMessage = decodeGrpcMessage(
+            resp.headers.get("grpc-message") || resp.headers.get("Grpc-Message") || "",
+          );
+          remember({
+            url,
+            method: String(init.method || "POST"),
+            httpStatus: resp.status,
+            status: resp.status,
+            grpcStatus: String(grpcStatus || ""),
+            message: grpcMessage || "",
+            at: Date.now(),
+          });
+        }
+        return resp;
+      };
+    }
+  }
+
+  function readVerifyNetworkError() {
+    const last = window.__grokVerifyLast;
+    if (!last || !last.at) return "";
+    // only consider recent responses
+    if (Date.now() - Number(last.at || 0) > 20000) return "";
+    const grpcStatus = String(last.grpcStatus || "");
+    const message = String(last.message || "");
+    if (grpcStatus && grpcStatus !== "0") {
+      return message || `验证码接口失败 grpc-status=${grpcStatus}`;
+    }
+    if (/invalid-validation-code|validation code is invalid|code is invalid|验证码.*无效|无效.*验证码/i.test(message)) {
+      return message;
+    }
+    return "";
+  }
+
+  function readVisibleVerifyError() {
+    const nodes = Array.from(document.querySelectorAll('[role="alert"], [class*="error" i], [class*="Error"], [data-invalid], [aria-invalid="true"]'));
+    for (const node of nodes) {
+      if (isJarvisPanelNode && isJarvisPanelNode(node)) continue;
+      const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text) continue;
+      if (/invalid|无效|过期|expired|incorrect|错误|failed|失败/i.test(text)) return text.slice(0, 180);
+    }
+    const body = pageText();
+    if (/Email validation code is invalid|invalid-validation-code/i.test(body)) {
+      return "Email validation code is invalid";
+    }
+    if (/验证码.*(无效|错误|过期)/i.test(body)) {
+      const m = body.match(/验证码.{0,20}(无效|错误|过期)/i);
+      return m ? m[0].slice(0, 180) : "验证码无效";
+    }
+    if (/code.*(invalid|incorrect|expired)/i.test(body)) {
+      const m = body.match(/code.{0,20}(invalid|incorrect|expired)/i);
+      return m ? m[0].slice(0, 180) : "code invalid";
+    }
+    return "";
+  }
+
   async function fillAndConfirmCode(code) {
     setPhase("fill_code", `填写验证码 ${code}`);
+    ensureVerifyNetworkProbe();
+    window.__grokVerifyLast = null;
+
     const clean = String(code).replace(/[^A-Za-z0-9]/g, "");
     const input = queryFirst([
       'input[name="code"]',
@@ -2307,17 +2393,70 @@
 
     if (detectPageMode() === "credentials" || detectPageMode() === "done") return;
 
-    const btn = findClickableByText([/Confirm email/i, /确认/, /^Verify$/i, /Verify email/i]);
+    const btn = findClickableByText([
+      /Confirm email/i,
+      /^确认邮箱$/,
+      /确认邮箱/,
+      /^确认$/,
+      /^Verify$/i,
+      /Verify email/i,
+    ]);
     if (btn) await clickEl(btn);
     else {
-      const submit = queryFirst(['button[type="submit"]']);
-      if (submit) await clickEl(submit);
+      // Prefer the real page submit, never panel buttons.
+      const submit = Array.from(document.querySelectorAll('button[type="submit"], button'))
+        .find((el) => {
+          if (isJarvisPanelNode && isJarvisPanelNode(el)) return false;
+          if (isCookieBannerNode && isCookieBannerNode(el)) return false;
+          const text = String(el.innerText || el.value || "").trim();
+          return /确认邮箱|Confirm email|Verify/i.test(text) && visible(el) && !el.disabled;
+        })
+        || queryFirst(['form button[type="submit"]', 'button[type="submit"]']);
+      if (submit && !(isJarvisPanelNode && isJarvisPanelNode(submit))) await clickEl(submit);
       else input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, keyCode: 13 }));
+    }
+
+    // Wait briefly for either next page or explicit verify API error.
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      if (detectPageMode() === "credentials" || detectPageMode() === "done") return;
+      const netErr = readVerifyNetworkError();
+      if (netErr) {
+        throw new Error(`邮箱验证码被服务端拒绝：${netErr}`);
+      }
+      const uiErr = readVisibleVerifyError();
+      if (uiErr) {
+        throw new Error(`邮箱验证失败：${uiErr}`);
+      }
+      await sleep(250);
     }
   }
 
   async function waitForMode(token, modes, timeoutMs, label) {
     await waitFor(token, () => modes.includes(detectPageMode()), timeoutMs, label);
+  }
+
+  async function waitCredentialsAfterCode(token, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 45000);
+    while (Date.now() < deadline) {
+      assertRunning(token);
+      const mode = detectPageMode();
+      if (mode === "credentials" || mode === "done") return mode;
+      const netErr = readVerifyNetworkError();
+      if (netErr) throw new Error(`邮箱验证码被服务端拒绝：${netErr}`);
+      const uiErr = readVisibleVerifyError();
+      if (uiErr) throw new Error(`邮箱验证失败：${uiErr}`);
+      // still verify page without error: keep waiting a bit
+      await sleepCancellable(token, 300);
+    }
+    const netErr = readVerifyNetworkError();
+    if (netErr) throw new Error(`邮箱验证码被服务端拒绝：${netErr}`);
+    const uiErr = readVisibleVerifyError();
+    if (uiErr) throw new Error(`邮箱验证失败：${uiErr}`);
+    if (detectPageMode() === "verify") {
+      throw new Error("验证码提交后仍停留在验证页。常见原因：验证码无效/过期/已使用。请点重置后重新注册拿新码，不要反复点确认邮箱");
+    }
+    throw new Error(`timeout waiting for credentials after code (${timeoutMs || 45000}ms)`);
   }
 
   async function fillCredentials(given, family, password) {

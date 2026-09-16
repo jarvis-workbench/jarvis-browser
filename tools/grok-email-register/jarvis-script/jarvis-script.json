@@ -1,7 +1,7 @@
 {
   "id": "grok-email-register",
   "name": "Grok 邮箱注册",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "description": "真实 UI 注册 + 脚本目录持久配置 + Electron 目录落盘(account/cpa/grok2api/sso) + OAuth(device-code + consent action=allow) + 可选 NSFW",
   "enabled": true,
   "permissions": [

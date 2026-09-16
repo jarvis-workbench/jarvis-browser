@@ -10,6 +10,10 @@
 
 Python 协议脚本（`../register.py`）只作链路验证；**本脚本才是当前推荐的注册方式**。
 
+## 1.4.7
+- 验证码页：拦截 `VerifyEmailValidationCode` 的 gRPC 错误（如 invalid-validation-code）
+- 验证码无效/过期时立刻报错，不再干等 45s 后才 `timeout waiting for credentials`
+
 ## 1.4.6
 - 设备授权 consent 页：hidden `action` 默认为空，必须先写成 `action=allow` 再提交
 - 不再盲点任意 submit（会点到「拒绝」/ cookie 横幅，落到 `Invalid action`）
