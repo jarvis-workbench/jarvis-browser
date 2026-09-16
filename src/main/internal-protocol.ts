@@ -213,7 +213,7 @@ async function readFaviconMetadata(siteId: string) {
 
 async function readRendererHtml(pageId: InternalPageId) {
   let html = await readFile(getRendererIndexPath(), "utf8");
-  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+  if (usesDevRenderer()) {
     html = html.replace(
       '<script type="module" src="/main.ts"></script>',
       '<script type="module" src="/@vite/client"></script><script type="module" src="/main.ts"></script>',
@@ -227,8 +227,7 @@ async function readRendererHtml(pageId: InternalPageId) {
 }
 
 function isDevRendererAssetRequest(requestUrl: URL) {
-  return !app.isPackaged
-    && Boolean(process.env.VITE_DEV_SERVER_URL)
+  return usesDevRenderer()
     && requestUrl.pathname !== ""
     && requestUrl.pathname !== "/";
 }
@@ -282,11 +281,15 @@ function isAbsolutePath(filePath: string) {
 }
 
 function getRendererRootPath() {
-  if (!app.isPackaged) {
+  if (usesDevRenderer()) {
     return join(app.getAppPath(), "src", "renderer");
   }
 
   return join(__dirname, "../renderer");
+}
+
+function usesDevRenderer() {
+  return !app.isPackaged && Boolean(process.env.VITE_DEV_SERVER_URL);
 }
 
 function getRendererIndexPath() {
@@ -409,5 +412,8 @@ function contentTypeFromPath(filePath: string) {
   if (extension === ".woff2") {
     return "font/woff2";
   }
-  return "image/x-icon";
+  if (extension === ".ico") {
+    return "image/x-icon";
+  }
+  return "application/octet-stream";
 }
