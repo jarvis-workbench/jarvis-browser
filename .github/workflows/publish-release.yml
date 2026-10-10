@@ -1,0 +1,83 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      build_run_id:
+        description: Successful Release workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Verify build provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          export RELEASE_SHA="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          gh run view "$BUILD_RUN_ID" --json status,conclusion,headSha,headBranch,workflowName > build-run.json
+          node <<'JS'
+          const assert = require('node:assert/strict');
+          const run = require('./build-run.json');
+          assert.equal(run.workflowName, 'Release');
+          assert.equal(run.status, 'completed');
+          assert.equal(run.conclusion, 'success');
+          assert.equal(run.headSha, process.env.RELEASE_SHA);
+          assert.equal(run.headBranch, process.env.RELEASE_TAG);
+          JS
+
+      - name: Install metadata parser
+        run: npm ci --ignore-scripts
+
+      - name: Download verified build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id }}
+          pattern: jarvis-browser-*
+          path: release-artifacts
+
+      - name: Prepare and verify release files
+        run: node .github/scripts/prepare-release.cjs release-artifacts release-assets "${RELEASE_TAG#v}"
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+            node -e "require('node:assert/strict').equal(require('./release-state.json').isDraft, true, 'Release must still be a draft')"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "${RELEASE_TAG#v}" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
