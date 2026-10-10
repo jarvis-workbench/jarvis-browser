@@ -6,7 +6,7 @@ const asar = require('@electron/asar');
 function verifyPackagedApp(resources, platform, projectDir) {
   const archive = path.join(resources, 'app.asar');
   asar.uncache(archive);
-  const entries = new Set(asar.listPackage(archive).map(entry => entry.replace(/^\//, '')));
+  const entries = new Set(asar.listPackage(archive).map(entry => entry.replaceAll('\\', '/').replace(/^\//, '')));
   const read = name => asar.extractFile(archive, name);
   for (const name of [
     'package.json', 'dist/main/main.js', 'dist/preload/preload.js',

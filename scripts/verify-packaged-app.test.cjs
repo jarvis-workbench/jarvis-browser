@@ -11,7 +11,7 @@ test('packaged checks reject missing shared modules and default macOS icons', as
   const source = path.join(root, 'source');
   const resources = path.join(root, 'App.app/Contents/Resources');
   const files = {
-    'package.json': JSON.stringify({ version: '0.1.8', main: 'dist/main/main.js' }),
+    'package.json': JSON.stringify({ version: '0.1.7', main: 'dist/main/main.js' }),
     'dist/main/main.js': 'require("../shared/utils");',
     'dist/preload/preload.js': '',
     'dist/preload/web-page-preload.js': '',
@@ -34,6 +34,14 @@ test('packaged checks reject missing shared modules and default macOS icons', as
     const archive = path.join(resources, 'app.asar');
     await asar.createPackage(source, archive);
     assert.doesNotThrow(() => verifyPackagedApp(resources, 'darwin', path.join(__dirname, '..')));
+
+    const listPackage = asar.listPackage;
+    try {
+      asar.listPackage = (...args) => listPackage(...args).map(entry => entry.replaceAll('/', '\\'));
+      assert.doesNotThrow(() => verifyPackagedApp(resources, 'linux', path.join(__dirname, '..')));
+    } finally {
+      asar.listPackage = listPackage;
+    }
 
     fs.writeFileSync(plist, '<plist><key>CFBundleIconFile</key><string>electron.icns</string></plist>');
     assert.throws(() => verifyPackagedApp(resources, 'darwin', path.join(__dirname, '..')), /bundle must use the application icon/);
