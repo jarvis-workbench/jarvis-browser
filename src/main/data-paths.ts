@@ -1,8 +1,11 @@
 import { app } from "electron";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-const appRoot = join(homedir(), "jarvis-browser");
+// Allow packaged startup checks to use an isolated profile, including the instance lock.
+const appRoot = process.env.JARVIS_BROWSER_DATA_ROOT
+  ? resolve(process.env.JARVIS_BROWSER_DATA_ROOT)
+  : join(homedir(), "jarvis-browser");
 const userRoot = join(appRoot, "default");
 const runtimeRoot = join(userRoot, "runtime");
 

@@ -1,6 +1,6 @@
 {
   "name": "jarvis-browser",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Site-first multi-session Electron browser",
   "private": true,
   "type": "commonjs",
@@ -19,7 +19,7 @@
     "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "test:main": "node --test dist-test/test/**/*.test.js",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "npm run build:test && npm run test:main"
+    "test": "npm run build:test && npm run test:main && node --test scripts/verify-packaged-app.test.cjs"
   },
   "dependencies": {
     "@icon-park/vue-next": "^1.4.2",
