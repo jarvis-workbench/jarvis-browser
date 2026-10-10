@@ -36,11 +36,17 @@ test('packaged checks reject missing shared modules and default macOS icons', as
     assert.doesNotThrow(() => verifyPackagedApp(resources, 'darwin', path.join(__dirname, '..')));
 
     const listPackage = asar.listPackage;
+    const extractFile = asar.extractFile;
     try {
       asar.listPackage = (...args) => listPackage(...args).map(entry => entry.replaceAll('/', '\\'));
+      asar.extractFile = (archivePath, filename) => {
+        assert.equal(filename.includes('/'), false, 'Use the native archive path when reading Windows files');
+        return extractFile(archivePath, filename.replaceAll('\\', '/'));
+      };
       assert.doesNotThrow(() => verifyPackagedApp(resources, 'linux', path.join(__dirname, '..')));
     } finally {
       asar.listPackage = listPackage;
+      asar.extractFile = extractFile;
     }
 
     fs.writeFileSync(plist, '<plist><key>CFBundleIconFile</key><string>electron.icns</string></plist>');
