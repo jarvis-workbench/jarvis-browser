@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeImage } from "electron";
 import { join } from "node:path";
 import { AutomationBridge } from "./automation-bridge";
+import { configureLocalRendererSession } from "./renderer-session";
 import { BrowserHost } from "./browser-host";
 import { configureElectronDataPaths } from "./data-paths";
 import { createDefaultProfilePartition, createSessionPartition } from "./electron-session-manager";
@@ -123,6 +124,7 @@ const createWindow = async () => {
   });
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    await configureLocalRendererSession(mainWindow.webContents.session, process.env.VITE_DEV_SERVER_URL);
     await mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     return;
   }

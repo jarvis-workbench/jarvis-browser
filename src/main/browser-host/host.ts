@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, session as electronSession, shell } from "electron";
+import { BrowserWindow, Menu, WebContentsView, clipboard, session as electronSession, shell } from "electron";
 import { join } from "node:path";
 import type {
   AutomationDomQueryInput,
@@ -56,6 +56,7 @@ import {
 } from "../browser-overlay-menu";
 import { MetadataStore, normalizeHttpUrl } from "../store";
 import { ViewLifecycle } from "./lifecycle";
+import { createPageContextMenuTemplate } from "./context-menu";
 import { JarvisMonitorController } from "./monitor/controller";
 import {
   formatNavigationError,
@@ -1231,6 +1232,50 @@ export class BrowserHost {
 
   private bindNavigationEvents(view: WebContentsView, tabId: string) {
     const webContents = view.webContents;
+    webContents.on("context-menu", (_event, params) => {
+      const isAlive = () => !this.window.isDestroyed()
+        && this.activeTabId === tabId && this.isViewAlive(tabId, webContents);
+      if (!isAlive()) {
+        return;
+      }
+
+      this.browserOverlayHost.closeOverlay();
+      const template = createPageContextMenuTemplate(params, {
+        isAlive,
+        canGoBack: webContents.navigationHistory.canGoBack(),
+        canGoForward: webContents.navigationHistory.canGoForward(),
+        back: () => this.back(tabId),
+        forward: () => this.forward(tabId),
+        reload: () => this.runViewTask(tabId, this.reload(tabId)),
+        // Target the page explicitly: menu roles can edit the outer renderer instead.
+        edit: (action) => {
+          webContents.focus();
+          webContents[action]();
+        },
+        openLink: (url) => {
+          const target = resolveNavigationTarget(url);
+          if (target.kind === "browser") {
+            this.runViewTask(tabId, this.createTab({ url: target.url, openerTabId: tabId }));
+          } else if (target.kind === "external") {
+            this.runViewTask(tabId, this.openExternalTarget(target, tabId));
+          }
+        },
+        copyText: (text) => clipboard.writeText(text),
+        download: (url) => webContents.downloadURL(url),
+        copyImage: (x, y) => webContents.copyImageAt(x, y),
+        inspect: (x, y) => {
+          if (!webContents.isDevToolsOpened()) {
+            webContents.once("devtools-opened", () => this.bindDevToolsNavigationEvents(webContents, tabId));
+          }
+          webContents.inspectElement(x, y);
+        },
+      });
+      Menu.buildFromTemplate(template).popup({
+        window: this.window,
+        frame: params.frame ?? undefined,
+        sourceType: params.menuSourceType,
+      });
+    });
     webContents.setWindowOpenHandler(({ url }) => {
       if (!this.isViewAlive(tabId, webContents)) {
         return { action: "deny" };
