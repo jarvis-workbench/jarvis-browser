@@ -758,7 +758,7 @@ watch(pendingDeleteCurrentSession, async () => {
             <span v-else>{{ topLevelTabInitial(tab) }}</span>
           </span>
           <span class="chrome-tab__title">{{ topLevelTabTitle(tab) }}</span>
-          <Close class="chrome-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeTopLevelTab(tab)" />
+          <Close class="chrome-tab__close" theme="outline" size="10" :strokeWidth="4" @click.stop="closeTopLevelTab(tab)" />
         </button>
 
         <button
@@ -801,7 +801,7 @@ watch(pendingDeleteCurrentSession, async () => {
           </span>
           <span class="chrome-session-tab__title">{{ sessionGroupTitle(group) }}</span>
           <span v-if="group.tabs.length > 1" class="chrome-session-tab__count">{{ group.tabs.length }}</span>
-          <Close class="chrome-session-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeSessionGroup(group)" />
+          <Close class="chrome-session-tab__close" theme="outline" size="10" :strokeWidth="4" @click.stop="closeSessionGroup(group)" />
         </button>
       </div>
 
@@ -833,7 +833,7 @@ watch(pendingDeleteCurrentSession, async () => {
             <span v-else>{{ pageTabTitle(tab).trim().slice(0, 1).toUpperCase() }}</span>
           </span>
           <span class="chrome-page-tab__title">{{ pageTabTitle(tab) }}</span>
-          <Close class="chrome-page-tab__close" theme="outline" size="10" strokeWidth="4" @click.stop="closeBrowserTab(tab.id)" />
+          <Close class="chrome-page-tab__close" theme="outline" size="10" :strokeWidth="4" @click.stop="closeBrowserTab(tab.id)" />
         </button>
       </div>
 
